@@ -80,6 +80,7 @@ export const shares = sqliteTable(
     ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     fileId: text("file_id").notNull().references(() => files.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull(),
+    tokenValue: text("token_value"),
     expiresAt: text("expires_at"),
     maxDownloads: integer("max_downloads"),
     downloadCount: integer("download_count").notNull().default(0),

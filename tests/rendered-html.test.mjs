@@ -56,3 +56,19 @@ test("ships the generated Open Graph card at the declared dimensions", async () 
   assert.match(layout, /width:\s*1200/);
   assert.match(layout, /height:\s*630/);
 });
+
+test("share links remain visible to their owner after the creation drawer closes", async () => {
+  const [drive, shareRoute, migration] = await Promise.all([
+    readFile(new URL("components/DriveClient.tsx", root), "utf8"),
+    readFile(new URL("app/api/shares/route.ts", root), "utf8"),
+    readFile(new URL("drizzle/0003_supreme_randall.sql", root), "utf8"),
+  ]);
+  assert.match(migration, /ADD `token_value` text/);
+  assert.match(shareRoute, /s\.token_value/);
+  assert.match(shareRoute, /token_hash, token_value/);
+  assert.match(shareRoute, /publicShareOrigin.*share\.token_value/s);
+  assert.match(drive, /分享链接会保留在当前网盘中/);
+  assert.match(drive, /复制链接/);
+  assert.match(drive, /关闭后仍可在“分享”页面再次查看和复制/);
+  assert.doesNotMatch(drive, /此链接只显示一次/);
+});

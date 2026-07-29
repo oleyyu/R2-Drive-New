@@ -81,6 +81,7 @@ type ShareRow = {
   fileName: string;
   size: number;
   contentType: string | null;
+  url: string | null;
   expiresAt: string | null;
   maxDownloads: number | null;
   downloadCount: number;
@@ -970,6 +971,12 @@ export function DriveClient() {
                 shares={shares}
                 loading={loading}
                 sharingEnabled={sharingEnabled}
+                onCopy={(url) => {
+                  void navigator.clipboard
+                    .writeText(url)
+                    .then(() => setNotice("分享链接已复制。"))
+                    .catch(() => setNotice("复制失败，请选中链接后手动复制。"));
+                }}
                 onRevoke={(id) => void revokeShare(id)}
                 onReshare={(share) =>
                   openShare({
@@ -1429,12 +1436,14 @@ function ShareManager({
   shares,
   loading,
   sharingEnabled,
+  onCopy,
   onRevoke,
   onReshare,
 }: {
   shares: ShareRow[];
   loading: boolean;
   sharingEnabled: boolean;
+  onCopy: (url: string) => void;
   onRevoke: (id: string) => void;
   onReshare: (share: ShareRow) => void;
 }) {
@@ -1467,20 +1476,41 @@ function ShareManager({
       </div>
       {shares.map((share) => (
         <article key={share.id}>
-          <div><FileGlyph file={{ kind: "file", name: share.fileName, contentType: share.contentType }} /><span><strong>{share.fileName}</strong><small>{formatBytes(share.size)}</small></span></div>
+          <div>
+            <FileGlyph file={{ kind: "file", name: share.fileName, contentType: share.contentType }} />
+            <span>
+              <strong>{share.fileName}</strong>
+              <small>{formatBytes(share.size)}</small>
+              {share.url ? (
+                <input
+                  className="drive-share-url"
+                  aria-label={`${share.fileName} 的分享链接`}
+                  readOnly
+                  value={share.url}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              ) : (
+                <small>旧版链接无法恢复，请重新创建一次。</small>
+              )}
+            </span>
+          </div>
           <span className={`share-status ${share.status}`}>
             {share.status === "active" ? "有效" : share.status === "expired" ? "已过期" : "次数已用完"}
           </span>
           <span>{share.downloadCount}{share.maxDownloads === null ? " 次" : ` / ${share.maxDownloads} 次`}</span>
           <span>{share.expiresAt ? formatDate(share.expiresAt) : "长期有效"}</span>
           <div>
-            <button onClick={() => onReshare(share)}><LinkSimple /> 重新创建</button>
+            {share.url ? (
+              <button onClick={() => onCopy(share.url!)}><Copy /> 复制链接</button>
+            ) : (
+              <button onClick={() => onReshare(share)}><LinkSimple /> 重新创建</button>
+            )}
             <button className="danger" onClick={() => onRevoke(share.id)}><X /> 撤销</button>
           </div>
         </article>
       ))}
       <p className="drive-share-security-note">
-        出于安全考虑，分享原始令牌只在创建时显示一次；需要再次复制时请重新创建链接。
+        分享链接会保留在当前网盘中，可随时回来查看和复制；过期或撤销后链接将无法下载。
       </p>
     </div>
   );
@@ -1614,7 +1644,7 @@ function ShareDrawer({
           <div className="drive-share-result">
             <span>链接已创建并尝试复制</span>
             <div><input readOnly value={createdUrl} /><button type="button" onClick={() => navigator.clipboard.writeText(createdUrl)} aria-label="复制链接"><Copy /></button></div>
-            <small>此链接只显示一次。关闭后如需再次获取，请重新创建。</small>
+            <small>关闭后仍可在“分享”页面再次查看和复制此链接。</small>
           </div>
         )}
         <button className="button button-primary button-block" disabled={busy}>

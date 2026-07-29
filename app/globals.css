@@ -3404,6 +3404,24 @@ html[data-theme="dark"] .app-frame {
   color: var(--faint);
 }
 
+.drive-share-url {
+  width: min(100%, 420px);
+  height: 27px;
+  margin-top: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--page);
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+}
+
+.drive-share-url:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+}
+
 .drive-share-list > article > div:last-child {
   display: flex;
   justify-content: flex-end;

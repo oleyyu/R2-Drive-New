@@ -130,7 +130,7 @@ Content-Type: application/json
 }
 ```
 
-创建响应中的原始分享 URL 只显示一次。撤销：
+创建响应会返回分享 URL；之后也可通过 `GET /api/shares` 再次读取本人创建的链接。旧版本创建且未保存原始令牌的分享需要重新创建一次。撤销：
 
 ```http
 DELETE /api/shares/:id

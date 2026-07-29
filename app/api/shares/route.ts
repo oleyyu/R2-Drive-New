@@ -15,10 +15,11 @@ const schema = z.object({
 export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireUser(request, "shares:write");
+    const config = appConfig();
     const db = await ensureDatabase();
     const result = await db
       .prepare(
-        `SELECT s.id, s.file_id, s.expires_at, s.max_downloads, s.download_count,
+        `SELECT s.id, s.file_id, s.token_value, s.expires_at, s.max_downloads, s.download_count,
                 s.created_at, f.name, f.size, f.content_type
          FROM shares s
          JOIN files f ON f.id = s.file_id
@@ -30,6 +31,7 @@ export async function GET(request: Request): Promise<Response> {
       .all<{
         id: string;
         file_id: string;
+        token_value: string | null;
         expires_at: string | null;
         max_downloads: number | null;
         download_count: number;
@@ -46,6 +48,10 @@ export async function GET(request: Request): Promise<Response> {
         fileName: share.name,
         size: share.size,
         contentType: share.content_type,
+        url:
+          config.sharingEnabled && share.token_value
+            ? `${config.publicShareOrigin}/s/${share.token_value}`
+            : null,
         expiresAt: share.expires_at,
         maxDownloads: share.max_downloads,
         downloadCount: share.download_count,
@@ -88,10 +94,19 @@ export async function POST(request: Request): Promise<Response> {
       : null;
     await db
       .prepare(
-        `INSERT INTO shares (id, owner_id, file_id, token_hash, expires_at, max_downloads, download_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+        `INSERT INTO shares (id, owner_id, file_id, token_hash, token_value, expires_at, max_downloads, download_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       )
-      .bind(id, user.id, input.data.fileId, await sha256(token), expiresAt, input.data.maxDownloads ?? null, createdAt.toISOString())
+      .bind(
+        id,
+        user.id,
+        input.data.fileId,
+        await sha256(token),
+        token,
+        expiresAt,
+        input.data.maxDownloads ?? null,
+        createdAt.toISOString(),
+      )
       .run();
     await audit("share.created", user.id, "share", id, { fileId: input.data.fileId, expiresAt });
     return json(

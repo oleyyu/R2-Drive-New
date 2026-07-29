@@ -4,7 +4,7 @@
 
 - 密码使用 PBKDF2-SHA256、随机 16 字节盐和 100,000 次迭代；这是 Cloudflare Workers Web Crypto 当前支持的迭代上限。
 - 会话使用 32 字节随机令牌，Cookie 为 `HttpOnly; Secure; SameSite=Lax`，D1 只保存 SHA-256 摘要。
-- API Token 和邀请码明文只显示一次，数据库只存摘要。
+- API Token 和邀请码明文只显示一次，数据库只存摘要；文件分享链接按产品设置允许主人重复查看。
 - 所有 Cookie 写操作要求精确同源；Bearer API Token 不依赖 Origin，但必须满足 scope。
 - 管理后台和个人凭据设置拒绝 Bearer Token，只接受浏览器会话。
 
@@ -41,7 +41,8 @@ CSP 的 `connect-src` 只额外允许 R2 S3 域名，以便直传。
 
 - UI 可选择 1 天、7 天、30 天或长期有效
 - API 支持到期与下载次数上限
-- 分享管理页可查看状态并随时撤销；数据库只保存 token 摘要，原始链接只在创建时显示一次
+- 分享管理页可重复查看、复制并随时撤销链接；公开访问仍使用 token 摘要匹配
+- 为允许主人再次查看，D1 的 `shares.token_value` 会保存新分享的原始令牌；能读取该 D1 的账号也能取得仍有效的分享链接
 - 下载响应支持 Range
 - 默认禁止共享缓存
 - 开启 `PUBLIC_SHARE_CACHE_SECONDS` 前确认文件允许进入边缘缓存
