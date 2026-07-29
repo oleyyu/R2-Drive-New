@@ -2073,7 +2073,9 @@
       const allButtons = Array.from(document.querySelectorAll("button"));
       const navButtons = Array.from(document.querySelectorAll("[data-step]"));
       const pages = Array.from(document.querySelectorAll("[data-page]"));
-      const requestedStep = new URLSearchParams(window.location.search).get("step");
+      const requestedParameters = new URLSearchParams(window.location.search);
+      const requestedStep = requestedParameters.get("step");
+      const requestedAutostart = requestedParameters.get("autostart") === "1";
 
       const state = {
         activeStep: 0,
@@ -2089,6 +2091,7 @@
         updateInfo: null,
         accelerationInfo: null,
         accelerationRunning: false,
+        helperOutdated: false,
       };
 
       const helpUrls = [
@@ -2168,6 +2171,26 @@
         }
       }
 
+      function showAccelerationEnabled(result) {
+        state.accelerationInfo = result;
+        renderAccelerationProgress({
+          percent: 100,
+          stage: "done",
+          message: "上传加速已经开启",
+        });
+        byId("enable-upload-acceleration").classList.add("hidden");
+        byId("acceleration-open").href =
+          result.url || `https://${state.configuredHostname}/start`;
+        byId("acceleration-open").classList.remove("hidden");
+        setStatus(
+          byId("acceleration-status"),
+          "ok",
+          result.directUploadReady
+            ? "就近写入和 R2 直传都已就绪"
+            : "就近写入和高吞吐分片已就绪",
+        );
+      }
+
       function renderUpdateProgress(progress, errorMessage = "") {
         const value = progress || {
           percent: 0,
@@ -2198,19 +2221,55 @@
       }
 
       async function api(path, options = {}) {
-        const response = await fetch(path, {
-          ...options,
-          headers: {
-            "content-type": "application/json",
-            "x-r2-drive-setup-token": token,
-            ...(options.headers || {}),
-          },
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(result.error || `请求失败（${response.status}）`);
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 15_000);
+        try {
+          const response = await fetch(path, {
+            ...options,
+            signal: options.signal || controller.signal,
+            headers: {
+              "content-type": "application/json",
+              "x-r2-drive-setup-token": token,
+              ...(options.headers || {}),
+            },
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(result.error || `请求失败（${response.status}）`);
+          }
+          return result;
+        } catch (error) {
+          if (error?.name === "AbortError") {
+            throw new Error("本机助手响应超时，请重新打开 R2-Drive.command 后重试。");
+          }
+          throw error;
+        } finally {
+          window.clearTimeout(timeout);
         }
-        return result;
+      }
+
+      async function waitForHelperVersion(expectedVersion, timeoutMs = 20_000) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < timeoutMs) {
+          try {
+            const response = await fetch("/api/status", {
+              cache: "no-store",
+              signal: AbortSignal.timeout(2_500),
+            });
+            const status = await response.json();
+            if (
+              response.ok &&
+              status.runtimeVersion === expectedVersion &&
+              status.version === expectedVersion
+            ) {
+              return status;
+            }
+          } catch {
+            // A short connection failure is expected while the helper restarts.
+          }
+          await sleep(500);
+        }
+        throw new Error("本机助手没有自动重启，请重新双击 R2-Drive.command。");
       }
 
       async function watchJob(job, options = {}) {
@@ -2248,10 +2307,19 @@
       }
 
       async function startJob(path, body, options) {
-        const job = await api(path, {
-          method: "POST",
-          body: JSON.stringify(body || {}),
-        });
+        let job;
+        try {
+          job = await api(path, {
+            method: "POST",
+            body: JSON.stringify(body || {}),
+          });
+        } catch (error) {
+          if (options?.statusElement) {
+            setStatus(options.statusElement, "bad", error.message);
+          }
+          if (options?.onError) await options.onError(error, null);
+          throw error;
+        }
         return watchJob(job, options);
       }
 
@@ -2573,6 +2641,9 @@
         if (config.customHostname) {
           useProductionHostname(config.customHostname);
         }
+        if (status.uploadAcceleration?.enabled) {
+          showAccelerationEnabled(status.uploadAcceleration);
+        }
       }
 
       for (const button of document.querySelectorAll("[data-choice-group]")) {
@@ -2751,7 +2822,7 @@
               onProgress: (progress) => {
                 if (progress) renderUpdateProgress(progress);
               },
-              onDone: (result) => {
+              onDone: async (result) => {
                 state.updateInfo = {
                   ...state.updateInfo,
                   currentVersion: result.version,
@@ -2769,6 +2840,11 @@
                 );
                 if (result.url) {
                   window.open(result.url, "_blank", "noopener,noreferrer");
+                }
+                if (result.restartHelper) {
+                  setStatus(byId("update-status"), "busy", "正在重启新版本机助手");
+                  await waitForHelperVersion(result.version);
+                  window.location.reload();
                 }
               },
               onError: (error, current) => {
@@ -2800,31 +2876,14 @@
             onProgress: (progress) => {
               if (progress) renderAccelerationProgress(progress);
             },
-            onDone: (result) => {
-              state.accelerationInfo = result;
-              renderAccelerationProgress({
-                percent: 100,
-                stage: "done",
-                message: "上传加速已经开启",
-              });
-              byId("enable-upload-acceleration").classList.add("hidden");
-              byId("acceleration-open").href =
-                result.url || `https://${state.configuredHostname}/start`;
-              byId("acceleration-open").classList.remove("hidden");
-              setStatus(
-                byId("acceleration-status"),
-                "ok",
-                result.directUploadReady
-                  ? "就近写入和 R2 直传都已就绪"
-                  : "就近写入和高吞吐分片已就绪",
-              );
-            },
+            onDone: showAccelerationEnabled,
             onError: (error, current) => {
               renderAccelerationProgress(current?.progress, error.message);
             },
           });
-        } catch {
-          byId("log-dialog").showModal();
+        } catch (error) {
+          renderAccelerationProgress(null, error.message);
+          setStatus(byId("acceleration-status"), "bad", error.message);
         } finally {
           state.accelerationRunning = false;
         }
@@ -2946,6 +3005,40 @@
       api("/api/status", { method: "GET" })
         .then(async (status) => {
           hydrate(status);
+          if (!status.runtimeVersion || status.runtimeVersion !== status.version) {
+            state.helperOutdated = true;
+            const message = "新版文件已经安装，正在重启本机助手";
+            if (requestedStep === "upload-acceleration") {
+              showStep(state.resourcesReady ? 5 : 1, true);
+              renderAccelerationProgress({
+                percent: 3,
+                stage: "checking",
+                message,
+              });
+              setStatus(byId("acceleration-status"), "busy", message);
+            } else if (requestedStep === "update") {
+              showStep(4, true);
+              renderUpdateProgress({
+                percent: 3,
+                stage: "checking",
+                message,
+              });
+              setStatus(byId("update-status"), "busy", message);
+            }
+            try {
+              await waitForHelperVersion(status.version);
+              window.location.reload();
+            } catch (error) {
+              if (requestedStep === "upload-acceleration") {
+                renderAccelerationProgress(null, error.message);
+                setStatus(byId("acceleration-status"), "bad", error.message);
+              } else {
+                renderUpdateProgress(null, error.message);
+                setStatus(byId("update-status"), "bad", error.message);
+              }
+            }
+            return;
+          }
           if (status.currentJob && status.currentJob.status === "running") {
             await watchJob(status.currentJob, {
               statusElement: byId("storage-status"),
@@ -2966,6 +3059,8 @@
             showStep(state.resourcesReady ? 5 : 1, true);
             if (!state.resourcesReady) {
               setStatus(byId("storage-status"), "bad", "请先连接 R2 存储，再开启上传加速");
+            } else if (requestedAutostart) {
+              await enableAcceleration();
             }
           }
         })

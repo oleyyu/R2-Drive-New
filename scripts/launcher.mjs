@@ -143,8 +143,24 @@ async function pageContains(url, marker, timeoutMs = 2_000) {
   }
 }
 
+async function setupHelperIsCurrent() {
+  try {
+    const [response, packageMetadata] = await Promise.all([
+      fetch(`${SETUP_URL}api/status`, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(2_000),
+      }),
+      readFile(path.join(ROOT, "package.json"), "utf8").then(JSON.parse),
+    ]);
+    const status = await response.json();
+    return response.ok && status.runtimeVersion === packageMetadata.version;
+  } catch {
+    return false;
+  }
+}
+
 async function ensureSetupHelper() {
-  if (await pageContains(SETUP_URL, "R2 Drive · 本地安装向导")) return;
+  if (await setupHelperIsCurrent()) return;
   await stopOwnedService(8788, "setup");
   const child = spawn(
     process.execPath,
@@ -357,15 +373,10 @@ async function openDrive(instance) {
 }
 
 async function openSetup() {
-  if (await pageContains(SETUP_URL, "R2 Drive · 本地安装向导")) {
-    await openBrowser(SETUP_URL);
-    console.log("\n✓ 配置助手已经在运行，已为你打开。");
-    return;
-  }
-  await stopOwnedService(8788, "setup");
   await ensureDependencies();
-  console.log("\n正在打开配置助手…\n");
-  await runProcess(process.execPath, [path.join(ROOT, "scripts", "setup.mjs")]);
+  await ensureSetupHelper();
+  await openBrowser(SETUP_URL);
+  console.log("\n✓ 已使用当前版本打开配置助手。");
 }
 
 async function openUpdater() {

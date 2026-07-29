@@ -101,21 +101,12 @@ function SettingsContent({ user }: { user: ShellUser }) {
 
   async function enableUploadAcceleration() {
     const helper = window.open(
-      "http://127.0.0.1:8788/?step=upload-acceleration",
+      "http://127.0.0.1:8788/?step=upload-acceleration&autostart=1",
       "_blank",
     );
     if (!helper) {
       setNotice("浏览器阻止了本机助手窗口，请允许弹出窗口后重试。");
       return;
-    }
-    const sendIntent = () => {
-      helper.postMessage(
-        { type: "r2-drive:enable-upload-acceleration" },
-        "http://127.0.0.1:8788",
-      );
-    };
-    for (const delay of [300, 700, 1_200, 2_000, 3_200, 5_000]) {
-      window.setTimeout(sendIntent, delay);
     }
     setAccelerationBusy(true);
     const acceleratedPreferences = {

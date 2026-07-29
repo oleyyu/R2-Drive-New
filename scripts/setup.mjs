@@ -2,7 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -25,9 +25,11 @@ import {
 import { findD1DatabaseByName, parseWranglerJson } from "./wrangler-output.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
+const PACKAGE_PATH = path.join(ROOT, "package.json");
 const CONFIG_PATH = path.join(ROOT, "wrangler.jsonc");
 const DEV_VARS_PATH = path.join(ROOT, ".dev.vars");
 const CORS_PATH = path.join(ROOT, "config", "r2-cors.local.json");
+const ACCELERATION_STATE_PATH = path.join(ROOT, ".wrangler", "upload-acceleration.json");
 const UI_PATH = path.join(ROOT, "scripts", "setup-ui.html");
 const HOST = "127.0.0.1";
 const requestedPort = Number.parseInt(process.env.R2_DRIVE_SETUP_PORT ?? "8788", 10);
@@ -44,10 +46,12 @@ const LOCAL_ENTRY_URL = `${LOCAL_ORIGIN}/start`;
 const CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4";
 const csrfToken = randomBytes(32).toString("hex");
 const cloudflareDispatcher = new EnvHttpProxyAgent();
+const runtimeVersion = JSON.parse(await readFile(PACKAGE_PATH, "utf8")).version;
 const jobs = new Map();
 let currentJobId = null;
 let localDevProcess = null;
 let localDevUrl = null;
+let setupRestartScheduled = false;
 
 const ANSI_PATTERN = new RegExp(
   String.raw`[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))`,
@@ -873,6 +877,13 @@ async function enableUploadAcceleration(job) {
   const directUploadReady =
     secretNames.has("R2_ACCESS_KEY_ID") && secretNames.has("R2_SECRET_ACCESS_KEY");
 
+  const result = {
+    enabled: true,
+    directUploadReady,
+    bucket,
+    url: `https://${customHostname}/start`,
+  };
+  await saveUploadAccelerationState(result, customHostname);
   setJobProgress(job, 100, "done", "上传加速已经开启");
   addLog(
     job,
@@ -880,12 +891,7 @@ async function enableUploadAcceleration(job) {
       ? "\n✓ Local Uploads 已开启；已有 R2 直传凭据，网盘会优先直传并自动回退。\n"
       : "\n✓ Local Uploads 已开启；网盘会使用流式分片和就近 R2 写入。\n",
   );
-  return {
-    enabled: true,
-    directUploadReady,
-    bucket,
-    url: `https://${customHostname}/start`,
-  };
+  return result;
 }
 
 async function writeLocalSecrets(accessKeyId, secretAccessKey) {
@@ -1018,6 +1024,52 @@ async function fileExists(filePath) {
   }
 }
 
+async function readUploadAccelerationState(config) {
+  try {
+    const state = JSON.parse(await readFile(ACCELERATION_STATE_PATH, "utf8"));
+    const bucket = config.r2_buckets?.[0]?.bucket_name ?? "";
+    const customHostname =
+      config.routes?.find((route) => route?.custom_domain)?.pattern ?? "";
+    if (
+      state?.enabled === true &&
+      state.bucket === bucket &&
+      state.customHostname === customHostname
+    ) {
+      return {
+        enabled: true,
+        directUploadReady: state.directUploadReady === true,
+        bucket,
+        url: `https://${customHostname}/start`,
+        configuredAt: state.configuredAt ?? "",
+      };
+    }
+  } catch {
+    // Missing or stale local state simply means the wizard may offer the action again.
+  }
+  return null;
+}
+
+async function saveUploadAccelerationState(result, customHostname) {
+  await mkdir(path.dirname(ACCELERATION_STATE_PATH), { recursive: true });
+  const temporary = `${ACCELERATION_STATE_PATH}.${process.pid}.tmp`;
+  await writeFile(
+    temporary,
+    `${JSON.stringify(
+      {
+        enabled: true,
+        directUploadReady: result.directUploadReady === true,
+        bucket: result.bucket,
+        customHostname,
+        configuredAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  await rename(temporary, ACCELERATION_STATE_PATH);
+}
+
 async function getStatus() {
   const config = await readConfig();
   const localHealth = await inspectLocalDrive(800);
@@ -1026,9 +1078,11 @@ async function getStatus() {
   } else if (!localDevProcess || localDevProcess.exitCode !== null) {
     localDevUrl = null;
   }
+  const installedVersion = JSON.parse(await readFile(PACKAGE_PATH, "utf8")).version;
   return {
     node: process.version,
-    version: JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8")).version,
+    version: installedVersion,
+    runtimeVersion,
     config: {
       appName: config.vars?.APP_NAME ?? "R2 Drive",
       workerName: config.name ?? "r2-drive",
@@ -1048,6 +1102,7 @@ async function getStatus() {
         config.routes?.find((route) => route?.custom_domain)?.pattern ?? "",
     },
     hasLocalSecrets: await fileExists(DEV_VARS_PATH),
+    uploadAcceleration: await readUploadAccelerationState(config),
     localDrive: {
       running:
         localHealth.state === "ready" ||
@@ -1067,7 +1122,7 @@ async function getStatus() {
 async function checkForUpdates(job) {
   setJobProgress(job, 15, "checking", "正在连接 GitHub Releases");
   const packageMetadata = JSON.parse(
-    await readFile(path.join(ROOT, "package.json"), "utf8"),
+    await readFile(PACKAGE_PATH, "utf8"),
   );
   const release = await fetchLatestRelease(githubFetch);
   const available = compareVersions(release.version, packageMetadata.version) > 0;
@@ -1094,7 +1149,7 @@ async function installLatestUpdate(job, body) {
 
   setJobProgress(job, 5, "checking", "正在确认当前版本和 Cloudflare 登录");
   const packageMetadata = JSON.parse(
-    await readFile(path.join(ROOT, "package.json"), "utf8"),
+    await readFile(PACKAGE_PATH, "utf8"),
   );
   const release = await fetchLatestRelease(githubFetch);
   if (
@@ -1192,6 +1247,7 @@ async function installLatestUpdate(job, body) {
       releaseUrl: release.url,
       deployed: Boolean(customHostname),
       url: customHostname ? `https://${customHostname}/admin` : "",
+      restartHelper: true,
     };
   } catch (error) {
     if (transaction) {
@@ -1491,6 +1547,13 @@ async function route(request, response) {
   if (request.method === "GET" && url.pathname.startsWith("/api/jobs/")) {
     const job = jobs.get(url.pathname.split("/").at(-1));
     sendJson(response, job ? 200 : 404, job ? publicJob(job) : { error: "任务不存在。" });
+    if (
+      job?.kind === "update-install" &&
+      job.status === "success" &&
+      job.result?.restartHelper
+    ) {
+      scheduleSetupRestart();
+    }
     return;
   }
 
@@ -1594,6 +1657,31 @@ function stopLocalDrive() {
   if (localDevProcess && localDevProcess.exitCode === null) {
     localDevProcess.kill("SIGTERM");
   }
+}
+
+function scheduleSetupRestart() {
+  if (setupRestartScheduled) return;
+  setupRestartScheduled = true;
+  const timer = setTimeout(() => {
+    stopLocalDrive();
+    server.close(() => {
+      const child = spawn(
+        process.execPath,
+        [path.join(ROOT, "scripts", "setup.mjs"), "--no-open"],
+        {
+          cwd: ROOT,
+          env: process.env,
+          shell: false,
+          stdio: "ignore",
+          windowsHide: true,
+          detached: true,
+        },
+      );
+      child.unref();
+      process.exit(0);
+    });
+  }, 750);
+  timer.unref();
 }
 
 process.once("exit", stopLocalDrive);

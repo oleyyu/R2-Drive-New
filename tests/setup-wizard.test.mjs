@@ -61,6 +61,7 @@ test("ships a safe beginner launcher on macOS and Windows", async () => {
   assert.match(launcher, /4\. 检查更新／一键升级/);
   assert.match(launcher, /SETUP_URL}\?step=update/);
   assert.match(launcher, /setup\.mjs"\), "--no-open"/);
+  assert.match(launcher, /status\.runtimeVersion === packageMetadata\.version/);
   assert.match(launcher, /请输入 DELETE 后回车/);
   assert.match(launcher, /preflightUninstall/);
   assert.match(launcher, /正在删除云端 Worker/);
@@ -346,8 +347,8 @@ test("admin settings exposes one-click Wrangler upload acceleration", async () =
   ]);
   assert.match(settings, /user\.role === "admin"/);
   assert.match(settings, /开启上传加速/);
-  assert.match(settings, /127\.0\.0\.1:8788\/\?step=upload-acceleration/);
-  assert.match(settings, /r2-drive:enable-upload-acceleration/);
+  assert.match(settings, /127\.0\.0\.1:8788\/\?step=upload-acceleration&autostart=1/);
+  assert.doesNotMatch(settings, /postMessage/);
   assert.match(settings, /uploadConcurrency: 6/);
   assert.match(settings, /networkProfile: "throughput"/);
   assert.match(setup, /async function enableUploadAcceleration/);
@@ -355,7 +356,25 @@ test("admin settings exposes one-click Wrangler upload acceleration", async () =
   assert.match(setup, /"local-uploads", "get"/);
   assert.match(setup, /"cors",\s+"set"/);
   assert.match(setup, /url\.pathname === "\/api\/upload-acceleration\/enable"/);
+  assert.match(setup, /upload-acceleration\.json/);
+  assert.match(setup, /saveUploadAccelerationState/);
   assert.doesNotMatch(setup, /oauth\.pipelines\.cloudflare\.com/);
+});
+
+test("updates restart a stale setup helper instead of mixing UI and API versions", async () => {
+  const [packageMetadata, setup, watchdog] = await Promise.all([
+    readFile(path.join(root, "package.json"), "utf8").then(JSON.parse),
+    readFile(path.join(root, "scripts", "setup.mjs"), "utf8"),
+    readFile(path.join(root, "scripts", "restart-stale-setup.mjs"), "utf8"),
+  ]);
+  assert.equal(packageMetadata.scripts.postinstall, "node scripts/restart-stale-setup.mjs");
+  assert.match(setup, /runtimeVersion/);
+  assert.match(setup, /restartHelper: true/);
+  assert.match(setup, /scheduleSetupRestart/);
+  assert.match(watchdog, /status\?\.runtimeVersion/);
+  assert.match(watchdog, /currentJob\?\.kind !== "update-install"/);
+  assert.match(watchdog, /process\.kill\(setupPid, "SIGTERM"\)/);
+  assert.match(watchdog, /scripts", "setup\.mjs"\), "--no-open"/);
 });
 
 async function availablePort() {
@@ -450,6 +469,9 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     assert.match(html, /requestedStep === "domain"/);
     assert.match(html, /requestedStep === "update"/);
     assert.match(html, /requestedStep === "upload-acceleration"/);
+    assert.match(html, /requestedAutostart/);
+    assert.match(html, /waitForHelperVersion/);
+    assert.match(html, /showAccelerationEnabled/);
     assert.match(html, /一键开启上传加速/);
     assert.match(html, /不打开 Cloudflare 页面，也不要求复制密钥/);
     assert.match(html, /\/api\/upload-acceleration\/enable/);
@@ -480,6 +502,7 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     const statusBody = await status.json();
     assert.equal(status.status, 200);
     assert.equal(statusBody.config.workerName, "r2-drive");
+    assert.equal(statusBody.runtimeVersion, statusBody.version);
 
     const blocked = await fetch(`${base}/api/deploy`, {
       method: "POST",
