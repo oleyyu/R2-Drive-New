@@ -1664,22 +1664,29 @@ function scheduleSetupRestart() {
   setupRestartScheduled = true;
   const timer = setTimeout(() => {
     stopLocalDrive();
-    server.close(() => {
-      const child = spawn(
-        process.execPath,
-        [path.join(ROOT, "scripts", "setup.mjs"), "--no-open"],
-        {
-          cwd: ROOT,
-          env: process.env,
-          shell: false,
-          stdio: "ignore",
-          windowsHide: true,
-          detached: true,
-        },
-      );
-      child.unref();
+    const restarter = spawn(
+      process.execPath,
+      [
+        path.join(ROOT, "scripts", "restart-stale-setup.mjs"),
+        "--restart-after-exit",
+        String(process.pid),
+      ],
+      {
+        cwd: ROOT,
+        env: process.env,
+        shell: false,
+        stdio: "ignore",
+        windowsHide: true,
+        detached: true,
+      },
+    );
+    restarter.unref();
+    server.close(() => process.exit(0));
+    const forceExit = setTimeout(() => {
+      server.closeAllConnections?.();
       process.exit(0);
-    });
+    }, 4_000);
+    forceExit.unref();
   }, 750);
   timer.unref();
 }

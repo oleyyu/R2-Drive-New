@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SETUP_STATUS_URL = "http://127.0.0.1:8788/api/status";
 const WATCH_ARGUMENT = "--watch";
+const RESTART_ARGUMENT = "--restart-after-exit";
 const MAX_WATCH_MS = 45 * 60 * 1_000;
 
 function sleep(milliseconds) {
@@ -55,10 +56,7 @@ function inspectProcess(pid) {
 
 function isOwnedSetupProcess(metadata) {
   const command = normalized(metadata?.command);
-  return (
-    command.includes(normalized(path.resolve(ROOT))) &&
-    command.includes("scripts/setup.mjs")
-  );
+  return command.includes("scripts/setup.mjs");
 }
 
 function findSetupAncestor() {
@@ -82,6 +80,40 @@ function processIsRunning(pid) {
   }
 }
 
+async function setupIsResponding() {
+  try {
+    return Boolean(await readStatus());
+  } catch {
+    return false;
+  }
+}
+
+function launchSetupHelper() {
+  const child = spawn(
+    process.execPath,
+    [path.join(ROOT, "scripts", "setup.mjs"), "--no-open"],
+    {
+      cwd: ROOT,
+      env: process.env,
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+      detached: true,
+    },
+  );
+  child.unref();
+}
+
+async function restartAfterExit(setupPid) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (!processIsRunning(setupPid) && !(await setupIsResponding())) {
+      launchSetupHelper();
+      return;
+    }
+    await sleep(250);
+  }
+}
+
 async function watchAndRestart(setupPid) {
   const metadata = inspectProcess(setupPid);
   if (!isOwnedSetupProcess(metadata)) return;
@@ -101,23 +133,19 @@ async function watchAndRestart(setupPid) {
       const latest = inspectProcess(setupPid);
       if (!isOwnedSetupProcess(latest)) return;
       process.kill(setupPid, "SIGTERM");
-      for (let attempt = 0; attempt < 40 && processIsRunning(setupPid); attempt += 1) {
+      for (let attempt = 0; attempt < 40 && (await setupIsResponding()); attempt += 1) {
         await sleep(250);
       }
-      if (processIsRunning(setupPid)) return;
-      const child = spawn(
-        process.execPath,
-        [path.join(ROOT, "scripts", "setup.mjs"), "--no-open"],
-        {
-          cwd: ROOT,
-          env: process.env,
-          shell: false,
-          stdio: "ignore",
-          windowsHide: true,
-          detached: true,
-        },
-      );
-      child.unref();
+      if (await setupIsResponding()) {
+        const remaining = inspectProcess(setupPid);
+        if (!isOwnedSetupProcess(remaining)) return;
+        process.kill(setupPid, "SIGKILL");
+        for (let attempt = 0; attempt < 20 && (await setupIsResponding()); attempt += 1) {
+          await sleep(250);
+        }
+      }
+      if (await setupIsResponding()) return;
+      launchSetupHelper();
       return;
     }
     await sleep(750);
@@ -154,6 +182,8 @@ async function scheduleMigrationRestart() {
 
 if (process.argv[2] === WATCH_ARGUMENT) {
   await watchAndRestart(Number(process.argv[3]));
+} else if (process.argv[2] === RESTART_ARGUMENT) {
+  await restartAfterExit(Number(process.argv[3]));
 } else {
   await scheduleMigrationRestart();
 }

@@ -373,7 +373,10 @@ test("updates restart a stale setup helper instead of mixing UI and API versions
   assert.match(setup, /scheduleSetupRestart/);
   assert.match(watchdog, /status\?\.runtimeVersion/);
   assert.match(watchdog, /currentJob\?\.kind !== "update-install"/);
+  assert.match(watchdog, /return command\.includes\("scripts\/setup\.mjs"\)/);
   assert.match(watchdog, /process\.kill\(setupPid, "SIGTERM"\)/);
+  assert.match(watchdog, /process\.kill\(setupPid, "SIGKILL"\)/);
+  assert.match(watchdog, /--restart-after-exit/);
   assert.match(watchdog, /scripts", "setup\.mjs"\), "--no-open"/);
 });
 
