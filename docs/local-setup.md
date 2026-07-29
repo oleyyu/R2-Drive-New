@@ -189,8 +189,10 @@ npx wrangler secret put R2_SECRET_ACCESS_KEY
 
 ## 一键卸载
 
-双击启动器并选择“3. 一键卸载”。终端会从当前 `wrangler.jsonc` 读取并列出准确的 Worker、R2 桶、D1 数据库和自定义域名；只有再次输入大写 `DELETE` 才会开始。启动器会先用 D1 编号和 R2 Object API 做只读预检，确认当前 Cloudflare 账号中的目标与本机配置一致，再删除 Worker 以阻止新的上传。随后它会分页永久删除 R2 对象；若删除桶返回 `10008`，还会自动读取 D1 中的未完成分片上传，通过运行在 Cloudflare 边缘的临时清理 Worker 逐个 abort、再次清空普通对象并重试。可重试的 R2 服务错误会指数退避重试，临时 Worker 会在操作结束后停止。最后删除编号完全匹配的 D1 与本地配置。Cloudflare 的具体规则见 [删除 R2 桶](https://developers.cloudflare.com/r2/buckets/delete-buckets/)、[Multipart Uploads](https://developers.cloudflare.com/r2/objects/multipart-objects/) 与 [List objects API](https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/objects/methods/list/)。
+双击启动器并选择“3. 一键卸载”。终端会从当前 `wrangler.jsonc` 和升级器保留的 `.wrangler/primary-ownership.json` 读取目标；只有再次输入大写 `DELETE` 才会开始。删除前会同时核对账号、exact D1 `database_id`、R2 中原随机标记与创建时间，并让线上 Worker 回答只有原本机 Secret 才能生成的 HMAC 随机挑战。任何一项缺失或不符都会在云端删除前整体 fail-closed，Worker、R2、D1 和本机恢复依据全部保留；旧版资源也不会在卸载时按同名临时认领。
 
-删除 R2 桶会一并删除 CORS、生命周期、事件通知和其他桶级配置；删除 Worker 会一并删除 Worker Secret、版本和域名路由。所有云端步骤成功后，启动器才会恢复干净的 `wrangler.jsonc`，并删除 `.dev.vars`、本地 CORS、构建缓存和 Wrangler 项目缓存。项目源代码、Cloudflare 域名专区、其他项目与这台电脑的全局 Wrangler 登录都会保留。手动创建且可能被其他项目共用的 R2 API Token 也不会被代为删除，但其本机副本和 Worker Secret 会清除。
+预检通过后先删除 Worker 以阻止新上传，再通过 Cloudflare 边缘清理助手处理对象和未完成分片。安装助手创建的受管桶会删除；配置时明确复用的桶只清理本实例 owner UUID 前缀和随机标记，保留桶内其他数据及桶级配置。清理助手会保护归属标记到最终删除窗口，若删桶失败则恢复标记以便安全重试。创建 R2 后配置中途退出时，启动器也能使用先于建桶写入的 provisioning intent 处理该资源。Cloudflare 的具体规则见 [删除 R2 桶](https://developers.cloudflare.com/r2/buckets/delete-buckets/)、[Multipart Uploads](https://developers.cloudflare.com/r2/objects/multipart-objects/) 与 [List objects API](https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/objects/methods/list/)。
+
+删除受管 R2 桶会一并删除 CORS、生命周期、事件通知和其他桶级配置；复用桶不会删除这些配置。删除 Worker 会一并删除 Worker Secret、版本和域名路由。所有云端步骤成功后，启动器才会恢复干净的 `wrangler.jsonc`，并删除 `.dev.vars`、本地 CORS、构建缓存和 Wrangler 项目缓存。项目源代码、Cloudflare 域名专区、其他项目与这台电脑的全局 Wrangler 登录都会保留。手动创建且可能被其他项目共用的 R2 API Token 也不会被代为删除，但其本机副本和 Worker Secret 会清除。
 
 若网络、权限或 Cloudflare API 使任一步失败，本地目标配置会保留，处理提示后再次选择第 3 项即可继续；已经永久删除的文件无法恢复。

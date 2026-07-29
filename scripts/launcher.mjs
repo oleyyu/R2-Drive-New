@@ -1,31 +1,97 @@
 #!/usr/bin/env node
 
-import { randomBytes } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  randomBytes,
+  sign as signBytes,
+} from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { findD1DatabaseByName, parseWranglerJson } from "./wrangler-output.mjs";
+import {
+  assertPrimaryBucketOwnership,
+  assertPrimaryWorkerOwnership,
+  createPrimaryWorkerChallenge,
+  PRIMARY_WORKER_IDENTITY_PATH,
+  primaryProvisioningCleanupPlan,
+  primaryBucketOwnershipBody,
+  readPrimaryOwnershipIntent,
+  validatePrimaryOwnershipIntent,
+} from "./primary-ownership.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const CONFIG_PATH = path.join(ROOT, "wrangler.jsonc");
 const DEFAULT_CONFIG_PATH = path.join(ROOT, "config", "wrangler.default.jsonc");
+const PRIMARY_OWNERSHIP_PATH = path.join(
+  ROOT,
+  ".wrangler",
+  "primary-ownership.json",
+);
+const STORAGE_POOL_INVENTORY_PATH = path.join(
+  ROOT,
+  ".wrangler",
+  "storage-pool",
+  "nodes.json",
+);
+const STORAGE_POOL_PRIVATE_JWK_PATH = path.join(
+  ROOT,
+  ".wrangler",
+  "storage-pool",
+  "private-jwk.json",
+);
+const PURGE_HELPER_JOURNAL_PATH = path.join(
+  ROOT,
+  ".wrangler",
+  "uninstall",
+  "purge-helper.json",
+);
 const SETUP_URL = "http://127.0.0.1:8788/";
 const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/i;
 const D1_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CLOUDFLARE_API_MAX_ATTEMPTS = 8;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PROFILE_PATTERN = /^(?:default|r2drive-node-[a-f0-9]{8,20})$/;
+const RESOURCE_NAME_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
+const BUCKET_OWNERSHIP_PROTOCOL = "r2drive-storage-bucket-v1";
+const BUCKET_OWNERSHIP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const STORAGE_CAPABILITY_VERSION = "2";
+const STORAGE_CAPABILITY_PREFIX = "r2drive-storage-capability-v2";
+const STORAGE_CAPABILITY_UNSIGNED_BODY = "UNSIGNED-PAYLOAD";
+const PURGE_HELPER_JOURNAL_VERSION = 1;
+const PURGE_HELPER_NAME_PATTERN = /^r2-drive-purge-[a-f0-9]{32}$/;
+const PURGE_HELPER_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 // A "* * * * *" trigger fires at the next minute boundary, so one round has to
 // tolerate roughly a minute of waiting before the helper runs at all.
 const PURGE_ROUND_TIMEOUT_MS = 240_000;
 const MAX_PURGE_ROUNDS = 10;
-const MAX_UPLOADS_PER_ROUND = 500;
+const MAX_UPLOADS_PER_ROUND = 40;
+const MAX_PREFIXES_PER_ROUND = 75;
+const AUTH_ENVIRONMENT_NAMES = [
+  "CLOUDFLARE_API_TOKEN",
+  "CF_API_TOKEN",
+  "CLOUDFLARE_API_KEY",
+  "CF_API_KEY",
+  "CLOUDFLARE_EMAIL",
+  "CF_API_EMAIL",
+];
 let dependenciesChecked = false;
-let cloudflareDispatcher;
-let cloudflareFetch;
-let cloudflareRetryNoticeShown = false;
 let setupHelperProcess;
 
 function executable(name) {
@@ -74,14 +140,35 @@ export function driveEntryUrl(instance) {
   return instance.customHostname ? `https://${instance.customHostname}/start` : "";
 }
 
+export function assertPrimaryOwnershipMatchesInstance(source, instance) {
+  const ownership = validatePrimaryOwnershipIntent(source);
+  if (
+    ownership.accountId !== String(instance.accountId).toLowerCase() ||
+    ownership.r2Name !== instance.r2Name ||
+    ownership.workerName !== instance.workerName ||
+    ownership.d1Id !== String(instance.d1Id).toLowerCase() ||
+    typeof ownership.managedBucket !== "boolean"
+  ) {
+    throw new Error(
+      "本机主资源归属凭证与 account、Worker、R2 或 exact D1 database_id 不一致；未执行任何删除。",
+    );
+  }
+  return ownership;
+}
+
 function runProcess(program, args, options = {}) {
   return new Promise((resolve) => {
+    const hasInput = options.input !== undefined;
     const child = spawn(program, args, {
       cwd: options.cwd ?? ROOT,
-      env: { ...process.env, ...(options.env ?? {}) },
+      env: options.replaceEnv
+        ? options.env
+        : { ...process.env, ...(options.env ?? {}) },
       shell: false,
       windowsHide: true,
-      stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: options.capture
+        ? [hasInput ? "pipe" : "ignore", "pipe", "pipe"]
+        : "inherit",
     });
     let stdout = "";
     let stderr = "";
@@ -97,6 +184,12 @@ function runProcess(program, args, options = {}) {
       resolve({ code: null, stdout, stderr: `${stderr}${error.message}` });
     });
     child.on("close", (code) => resolve({ code, stdout, stderr }));
+    if (hasInput) {
+      // Wrangler can fail validation before reading stdin. Swallow the
+      // resulting EPIPE here; its exit code and stderr remain the real error.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(options.input);
+    }
   });
 }
 
@@ -386,190 +479,325 @@ async function openUpdater() {
   console.log("\n✓ 已打开程序更新页面。检查版本不会修改任何文件；安装前会再次要求确认。");
 }
 
-function wranglerAuthFileCandidates() {
-  const environment = process.env.CLOUDFLARE_API_ENVIRONMENT ?? "production";
-  const filename = environment === "production" ? "default.toml" : `${environment}.toml`;
-  const home = homedir();
-  return [
-    path.join(home, ".wrangler", "config", filename),
-    path.join(home, "Library", "Preferences", ".wrangler", "config", filename),
-    path.join(
-      process.env.XDG_CONFIG_HOME || path.join(home, ".config"),
-      ".wrangler",
-      "config",
-      filename,
-    ),
-    process.env.APPDATA
-      ? path.join(process.env.APPDATA, ".wrangler", "config", filename)
-      : "",
-    process.env.LOCALAPPDATA
-      ? path.join(process.env.LOCALAPPDATA, ".wrangler", "config", filename)
-      : "",
-  ].filter((value, index, values) => value && values.indexOf(value) === index);
-}
-
-function readTomlString(source, key) {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = source.match(
-    new RegExp(`^${escapedKey}\\s*=\\s*("(?:\\\\.|[^"])*")`, "m"),
-  );
-  if (!match) return "";
-  try {
-    return JSON.parse(match[1]);
-  } catch {
-    return "";
-  }
-}
-
-async function cloudflareAuthHeaders() {
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN;
-  if (apiToken) return { Authorization: `Bearer ${apiToken}` };
-  const apiKey = process.env.CLOUDFLARE_API_KEY || process.env.CF_API_KEY;
-  const apiEmail = process.env.CLOUDFLARE_EMAIL || process.env.CF_API_EMAIL;
-  if (apiKey && apiEmail) {
-    return { "X-Auth-Key": apiKey, "X-Auth-Email": apiEmail };
-  }
-  for (const authPath of wranglerAuthFileCandidates()) {
-    try {
-      const source = await readFile(authPath, "utf8");
-      const oauthToken = readTomlString(source, "oauth_token");
-      if (oauthToken) return { Authorization: `Bearer ${oauthToken}` };
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-  throw new Error("没有找到 Wrangler 登录授权。请先选择 2 重新连接 Cloudflare。");
-}
-
-async function initializeCloudflareFetch() {
-  if (cloudflareFetch) return;
-  const undici = await import("undici");
-  cloudflareFetch = undici.fetch;
-  cloudflareDispatcher = new undici.EnvHttpProxyAgent();
-}
-
-function cloudflareRetryDelay(response, attempt) {
-  const retryAfter = response.headers.get("retry-after");
-  if (retryAfter) {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) {
-      return Math.min(Math.max(seconds * 1_000, 1_000), 60_000);
-    }
-    const date = Date.parse(retryAfter);
-    if (Number.isFinite(date)) {
-      return Math.min(Math.max(date - Date.now(), 1_000), 60_000);
-    }
-  }
-  return Math.min(2 ** attempt * 1_000, 30_000);
-}
-
-async function cloudflareApi(pathname, options = {}) {
-  await initializeCloudflareFetch();
-  const url = new URL(`https://api.cloudflare.com/client/v4${pathname}`);
-  for (const [key, value] of Object.entries(options.query ?? {})) {
-    if (value !== undefined && value !== null && value !== "") {
-      url.searchParams.set(key, String(value));
-    }
-  }
-  const headers = await cloudflareAuthHeaders();
-  for (let attempt = 0; attempt < CLOUDFLARE_API_MAX_ATTEMPTS; attempt += 1) {
-    const response = await cloudflareFetch(url, {
-      method: options.method ?? "GET",
-      headers,
-      dispatcher: cloudflareDispatcher,
-      signal: AbortSignal.timeout(30_000),
-    });
-    const payload = await response.json().catch(() => null);
-    if (response.status === 404) return { missing: true, result: null };
-    if (response.ok && payload?.success) return { missing: false, ...payload };
-    const retryable =
-      response.status === 429 ||
-      response.status === 500 ||
-      response.status === 502 ||
-      response.status === 503 ||
-      response.status === 504;
-    if (retryable && attempt + 1 < CLOUDFLARE_API_MAX_ATTEMPTS) {
-      const delayMs = cloudflareRetryDelay(response, attempt);
-      if (!cloudflareRetryNoticeShown) {
-        cloudflareRetryNoticeShown = true;
-        console.log(
-          `\nCloudflare 正在限流或暂时繁忙，将等待 ${Math.ceil(delayMs / 1_000)} 秒后继续…`,
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      continue;
-    }
-    const message = Array.isArray(payload?.errors)
-      ? payload.errors.map((item) => item?.message).filter(Boolean).join("；")
-      : "";
-    throw new Error(
-      message
-        ? `Cloudflare 删除失败：${message.slice(0, 300)}`
-        : `Cloudflare 删除失败（HTTP ${response.status}）。`,
-    );
-  }
-  throw new Error("Cloudflare 删除失败：重试次数已用完。");
-}
-
 export function encodeR2ObjectKey(key) {
   return String(key).split("/").map(encodeURIComponent).join("/");
 }
 
-async function emptyR2Bucket(instance) {
-  let deleted = 0;
-  while (true) {
-    const listed = await cloudflareApi(
-      `/accounts/${instance.accountId}/r2/buckets/${encodeURIComponent(instance.r2Name)}/objects`,
-      { query: { per_page: 1000 } },
+export function validateWranglerProfile(value) {
+  const profile = String(value || "");
+  if (!PROFILE_PATTERN.test(profile)) {
+    throw new Error("Wrangler 登录配置名称无效，已停止以避免使用错误账号。");
+  }
+  return profile;
+}
+
+function validateAccountId(value) {
+  const accountId = String(value || "");
+  if (!ACCOUNT_ID_PATTERN.test(accountId)) {
+    throw new Error("Cloudflare Account ID 无效，已停止以避免误删。");
+  }
+  return accountId.toLowerCase();
+}
+
+function validateResourceName(value, label) {
+  const name = String(value || "");
+  if (!RESOURCE_NAME_PATTERN.test(name)) {
+    throw new Error(`${label}名称无效，已停止以避免误删。`);
+  }
+  return name;
+}
+
+function validateStorageNodeEndpoint(value, workerName, allowEmpty = false) {
+  if (allowEmpty && (value === undefined || value === null || value === "")) {
+    return "";
+  }
+  let endpoint;
+  try {
+    endpoint = new URL(String(value || ""));
+  } catch {
+    throw new Error("存储节点 workers.dev 地址无效，已停止以避免删除错误 Worker。");
+  }
+  if (
+    endpoint.protocol !== "https:" ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.port ||
+    (endpoint.pathname !== "/" && endpoint.pathname !== "") ||
+    endpoint.search ||
+    endpoint.hash ||
+    !endpoint.hostname.endsWith(".workers.dev") ||
+    endpoint.hostname.split(".")[0] !== workerName
+  ) {
+    throw new Error("存储节点 workers.dev 地址与 Worker 名称不匹配，已停止卸载。");
+  }
+  return endpoint.origin;
+}
+
+function validateBucketOwnershipFields(nodeId, markerKey, markerToken) {
+  const expectedPrefix = `.r2-drive-storage-node/${nodeId}/`;
+  const suffix =
+    typeof markerKey === "string" && markerKey.startsWith(expectedPrefix)
+      ? markerKey.slice(expectedPrefix.length)
+      : "";
+  if (
+    !UUID_PATTERN.test(nodeId) ||
+    !/^[a-f0-9]{32}\.json$/.test(suffix) ||
+    typeof markerToken !== "string" ||
+    !BUCKET_OWNERSHIP_TOKEN_PATTERN.test(markerToken)
+  ) {
+    throw new Error("受管 R2 存储桶缺少有效归属标记，已停止卸载以保护现有数据。");
+  }
+  return { markerKey, markerToken };
+}
+
+export function storageBucketOwnershipBody(node) {
+  const { markerToken } = validateBucketOwnershipFields(
+    node.id,
+    node.bucketOwnershipMarkerKey,
+    node.bucketOwnershipMarkerToken,
+  );
+  return `${JSON.stringify({
+    protocol: BUCKET_OWNERSHIP_PROTOCOL,
+    nodeId: node.id,
+    accountId: validateAccountId(node.accountId),
+    bucketName: validateResourceName(node.bucketName, "节点 R2 存储桶"),
+    workerName: validateResourceName(node.workerName, "节点 Worker"),
+    token: markerToken,
+  })}\n`;
+}
+
+export function assertManagedBucketOwnership(node, markerBody) {
+  if (markerBody !== storageBucketOwnershipBody(node)) {
+    throw new Error(
+      `受管 R2 存储桶 ${node.bucketName} 的随机归属标记不匹配；它可能已被同名重建，未删除任何内容。`,
     );
-    if (listed.missing) return { missing: true, deleted };
-    const keys = Array.isArray(listed.result)
-      ? listed.result
-          .map((item) => item?.key)
-          .filter((key) => typeof key === "string")
-      : [];
-    if (keys.length === 0) return { missing: false, deleted };
-    for (let index = 0; index < keys.length; index += 20) {
-      const batch = keys.slice(index, index + 20);
-      await Promise.all(
-        batch.map((key) =>
-          cloudflareApi(
-            `/accounts/${instance.accountId}/r2/buckets/${encodeURIComponent(instance.r2Name)}/objects/${encodeR2ObjectKey(key)}`,
-            { method: "DELETE" },
-          ),
-        ),
-      );
-      deleted += batch.length;
-      process.stdout.write(`\r已永久删除 R2 文件：${deleted}`);
-    }
   }
 }
 
-async function runWrangler(args, instance) {
+export function assertStorageNodeWorkerIdentity(node, health) {
+  if (
+    !health ||
+    typeof health !== "object" ||
+    health.ok !== true ||
+    health.nodeId !== node.id ||
+    health.protocol !== "r2drive-storage-node-v1"
+  ) {
+    throw new Error(
+      `节点 Worker ${node.workerName} 没有返回原安装身份；它可能已被同名重建，已停止卸载。`,
+    );
+  }
+}
+
+function wranglerEnvironment(accountId) {
+  const environment = {
+    ...process.env,
+    CLOUDFLARE_ACCOUNT_ID: validateAccountId(accountId),
+    NO_COLOR: "1",
+    WRANGLER_SEND_METRICS: "false",
+  };
+  // Every uninstall command is tied to an explicit Wrangler profile. Removing
+  // token-style overrides prevents a shell variable from silently selecting a
+  // different login than the inventory records.
+  for (const name of AUTH_ENVIRONMENT_NAMES) delete environment[name];
+  return environment;
+}
+
+async function runWrangler(args, target, options = {}) {
+  if (
+    args.some(
+      (argument) =>
+        argument === "--profile" || String(argument).startsWith("--profile="),
+    )
+  ) {
+    throw new Error("Wrangler profile 必须通过已验证的独立参数传入。");
+  }
+  const profile = validateWranglerProfile(options.profile ?? "default");
   const result = await runProcess(
     executable("npx"),
-    ["--no-install", "wrangler", ...args],
+    ["--no-install", "wrangler", ...args, "--profile", profile],
     {
       capture: true,
-      env: {
-        CLOUDFLARE_ACCOUNT_ID: instance.accountId,
-        NO_COLOR: "1",
-        WRANGLER_SEND_METRICS: "false",
-      },
+      env: wranglerEnvironment(target.accountId),
+      replaceEnv: true,
+      input: options.input,
     },
   );
   return { ...result, output: `${result.stdout}\n${result.stderr}` };
 }
 
+export function validateStoragePoolInventory(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    value.version !== 1 ||
+    !Array.isArray(value.nodes)
+  ) {
+    throw new Error("本机存储节点清单无效，已停止以避免遗漏其他账号的数据。");
+  }
+  const nodeIds = new Set();
+  const buckets = new Set();
+  const workers = new Set();
+  const nodes = value.nodes.map((rawNode) => {
+    if (!rawNode || typeof rawNode !== "object") {
+      throw new Error("本机存储节点清单含有无效记录，已停止卸载。");
+    }
+    const id = String(rawNode.id || "").toLowerCase();
+    if (!UUID_PATTERN.test(id) || nodeIds.has(id)) {
+      throw new Error("本机存储节点清单的 Node ID 无效或重复，已停止卸载。");
+    }
+    nodeIds.add(id);
+    const profile = validateWranglerProfile(rawNode.profile);
+    const accountId = validateAccountId(rawNode.accountId);
+    const bucketName = validateResourceName(rawNode.bucketName, "节点 R2 存储桶");
+    const workerName = validateResourceName(rawNode.workerName, "节点 Worker");
+    if (
+      typeof rawNode.managedBucket !== "boolean" ||
+      typeof rawNode.managedWorker !== "boolean"
+    ) {
+      throw new Error("本机存储节点清单缺少资源归属信息，已停止卸载。");
+    }
+    const bucketKey = `${accountId}\u0000${bucketName}`;
+    const workerKey = `${accountId}\u0000${workerName}`;
+    if (buckets.has(bucketKey) || workers.has(workerKey)) {
+      throw new Error("本机存储节点清单含有重复远端资源，已停止卸载。");
+    }
+    buckets.add(bucketKey);
+    workers.add(workerKey);
+    const suppliedLabel =
+      typeof rawNode.label === "string" ? rawNode.label.trim() : "";
+    if (
+      suppliedLabel.length > 80 ||
+      /[\u0000-\u001f\u007f]/.test(suppliedLabel)
+    ) {
+      throw new Error("本机存储节点清单含有无效显示名称，已停止卸载。");
+    }
+    const status =
+      rawNode.status === undefined ? "active" : String(rawNode.status);
+    if (!["provisioning", "pending", "active"].includes(status)) {
+      throw new Error("本机存储节点清单含有无效状态，已停止卸载。");
+    }
+    const uninstallCompletedAt =
+      typeof rawNode.uninstallCompletedAt === "string" &&
+      Number.isFinite(Date.parse(rawNode.uninstallCompletedAt))
+        ? rawNode.uninstallCompletedAt
+        : null;
+    const endpoint = validateStorageNodeEndpoint(
+      rawNode.endpoint,
+      workerName,
+      status === "provisioning" || Boolean(uninstallCompletedAt),
+    );
+    let bucketOwnershipMarkerKey = rawNode.bucketOwnershipMarkerKey;
+    let bucketOwnershipMarkerToken = rawNode.bucketOwnershipMarkerToken;
+    if (
+      rawNode.managedBucket &&
+      !uninstallCompletedAt
+    ) {
+      const marker = validateBucketOwnershipFields(
+        id,
+        bucketOwnershipMarkerKey,
+        bucketOwnershipMarkerToken,
+      );
+      bucketOwnershipMarkerKey = marker.markerKey;
+      bucketOwnershipMarkerToken = marker.markerToken;
+    } else if (
+      bucketOwnershipMarkerKey !== undefined ||
+      bucketOwnershipMarkerToken !== undefined
+    ) {
+      const marker = validateBucketOwnershipFields(
+        id,
+        bucketOwnershipMarkerKey,
+        bucketOwnershipMarkerToken,
+      );
+      bucketOwnershipMarkerKey = marker.markerKey;
+      bucketOwnershipMarkerToken = marker.markerToken;
+    }
+    return {
+      ...rawNode,
+      id,
+      label: suppliedLabel || workerName,
+      profile,
+      accountId,
+      bucketName,
+      workerName,
+      endpoint,
+      managedBucket: rawNode.managedBucket,
+      managedWorker: rawNode.managedWorker,
+      bucketOwnershipMarkerKey,
+      bucketOwnershipMarkerToken,
+      status,
+      uninstallCompletedAt,
+    };
+  });
+  return { ...value, version: 1, nodes };
+}
+
+async function readStoragePoolInventory() {
+  try {
+    return validateStoragePoolInventory(
+      JSON.parse(await readFile(STORAGE_POOL_INVENTORY_PATH, "utf8")),
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { version: 1, nodes: [], updatedAt: new Date().toISOString() };
+    }
+    if (error instanceof SyntaxError) {
+      throw new Error("本机存储节点清单不是有效 JSON，已停止卸载。");
+    }
+    throw error;
+  }
+}
+
+async function writeStoragePoolInventory(inventory) {
+  const temporary = `${STORAGE_POOL_INVENTORY_PATH}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await writeFile(
+      temporary,
+      `${JSON.stringify(
+        {
+          ...inventory,
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await rename(temporary, STORAGE_POOL_INVENTORY_PATH);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function markStorageNodeUninstalled(inventory, nodeId) {
+  const node = inventory.nodes.find((item) => item.id === nodeId);
+  if (!node) {
+    throw new Error("卸载进度无法写回存储节点清单，已保留 D1 供重试。");
+  }
+  node.uninstallCompletedAt = new Date().toISOString();
+  await writeStoragePoolInventory(inventory);
+}
+
 function isMissingCloudflareResource(output) {
-  return /does not exist|not found|NoSuchBucket|code:\s*1000[67]/i.test(output);
+  return /does not exist|not found|NoSuchBucket|has no deployments|No deployments? (?:are|is) available|code:\s*1000[67]/i.test(
+    output,
+  );
 }
 
 function isR2BucketNotEmpty(output) {
   return /code:\s*10008|bucket.+not empty|bucket.+isn.t empty/i.test(output);
 }
 
-async function pendingMultipartUploads(instance) {
+function d1ResultRows(output) {
+  const payload = parseWranglerJson(output, "Wrangler D1");
+  return Array.isArray(payload)
+    ? payload.flatMap((entry) =>
+        Array.isArray(entry?.results) ? entry.results : [],
+      )
+    : [];
+}
+
+async function executeD1UninstallQuery(instance, sql) {
   const result = await runWrangler(
     [
       "d1",
@@ -577,7 +805,7 @@ async function pendingMultipartUploads(instance) {
       instance.d1Name,
       "--remote",
       "--command",
-      "SELECT upload_id, storage_key FROM multipart_uploads",
+      sql,
       "--json",
       "--config",
       CONFIG_PATH,
@@ -585,77 +813,865 @@ async function pendingMultipartUploads(instance) {
     instance,
   );
   if (result.code !== 0) {
-    if (/no such table|does not exist|not found/i.test(result.output)) return [];
-    throw new Error(`无法检查残留分片上传：${result.output.trim().slice(-500)}`);
+    const error = new Error(
+      `无法读取卸载所需的 D1 记录：${result.output.trim().slice(-500)}`,
+    );
+    error.cloudflareOutput = result.output;
+    throw error;
   }
-  const payload = parseWranglerJson(result.output, "Wrangler D1");
-  const rows = Array.isArray(payload)
-    ? payload.flatMap((entry) => (Array.isArray(entry?.results) ? entry.results : []))
-    : [];
-  const uploads = rows
-    .map((row) => ({
-      uploadId: typeof row?.upload_id === "string" ? row.upload_id : "",
-      storageKey: typeof row?.storage_key === "string" ? row.storage_key : "",
-    }))
-    .filter((upload) => upload.uploadId && upload.storageKey);
-  return [
-    ...new Map(
-      uploads.map((upload) => [`${upload.storageKey}\u0000${upload.uploadId}`, upload]),
-    ).values(),
-  ];
+  return d1ResultRows(result.output);
 }
 
-async function listIncompleteMultipartUploads(instance) {
-  const listed = await cloudflareApi(
-    `/accounts/${instance.accountId}/r2/buckets/${encodeURIComponent(instance.r2Name)}/uploads`,
+function d1ManagedFlag(value, label) {
+  if (value === true || value === 1 || value === "1") return true;
+  if (value === false || value === 0 || value === "0") return false;
+  throw new Error(`D1 存储节点的 ${label} 标记无效，已停止卸载。`);
+}
+
+export function reconcileStorageNodeInventory(inventoryValue, d1Rows) {
+  const inventory = validateStoragePoolInventory(inventoryValue);
+  if (!Array.isArray(d1Rows)) {
+    throw new Error("D1 存储节点清单无效，已停止卸载。");
+  }
+
+  const remoteIds = new Set();
+  const remoteBuckets = new Set();
+  const remoteWorkers = new Set();
+  const remoteNodes = d1Rows.map((row) => {
+    if (!row || typeof row !== "object") {
+      throw new Error("D1 存储节点清单含有无效记录，已停止卸载。");
+    }
+    const id = String(row.id || "").toLowerCase();
+    const accountId = validateAccountId(row.account_id);
+    const bucketName = validateResourceName(row.bucket_name, "D1 R2 存储桶");
+    const workerName = validateResourceName(row.worker_name, "D1 Worker");
+    const bucketKey = `${accountId}\u0000${bucketName}`;
+    const workerKey = `${accountId}\u0000${workerName}`;
+    if (
+      !UUID_PATTERN.test(id) ||
+      remoteIds.has(id) ||
+      remoteBuckets.has(bucketKey) ||
+      remoteWorkers.has(workerKey)
+    ) {
+      throw new Error("D1 存储节点清单含有重复或无效资源，已停止卸载。");
+    }
+    remoteIds.add(id);
+    remoteBuckets.add(bucketKey);
+    remoteWorkers.add(workerKey);
+    return {
+      id,
+      accountId,
+      bucketName,
+      workerName,
+      managedBucket: d1ManagedFlag(row.managed_bucket, "managed_bucket"),
+      managedWorker: d1ManagedFlag(row.managed_worker, "managed_worker"),
+    };
+  });
+
+  const localById = new Map(inventory.nodes.map((node) => [node.id, node]));
+  const remoteById = new Map(remoteNodes.map((node) => [node.id, node]));
+  const missingLocally = remoteNodes.filter((node) => !localById.has(node.id));
+  const missingRemotely = inventory.nodes.filter(
+    (node) => !remoteById.has(node.id) && node.status === "active",
   );
-  if (listed.missing) return [];
-  const uploads = (Array.isArray(listed.result) ? listed.result : [])
-    .map((item) => ({
-      storageKey: typeof item?.key === "string" ? item.key : "",
-      uploadId: typeof item?.uploadId === "string" ? item.uploadId : "",
-    }))
-    .filter((upload) => upload.storageKey && upload.uploadId);
-  return [
-    ...new Map(
-      uploads.map((upload) => [`${upload.storageKey}\u0000${upload.uploadId}`, upload]),
-    ).values(),
-  ];
+  if (missingLocally.length || missingRemotely.length) {
+    throw new Error(
+      "本机节点清单与主 D1 的 storage_nodes 不一致；为避免遗漏其他账号资源，已停止卸载。",
+    );
+  }
+
+  for (const local of inventory.nodes) {
+    const remote = remoteById.get(local.id);
+    if (!remote) {
+      // Provisioning intent is deliberately written before the first remote
+      // mutation. A crash before enrollment leaves a local-only record that
+      // uninstall must be able to recover. Active nodes never get this escape.
+      continue;
+    }
+    if (
+      remote.accountId !== local.accountId ||
+      remote.bucketName !== local.bucketName ||
+      remote.workerName !== local.workerName ||
+      remote.managedBucket !== local.managedBucket ||
+      remote.managedWorker !== local.managedWorker
+    ) {
+      throw new Error(
+        `附加节点 ${local.label} 的本机清单与主 D1 资源归属不一致，已停止卸载。`,
+      );
+    }
+  }
+  return remoteNodes;
 }
 
-// R2 lists what is really in the bucket; the app's own table is the fallback
-// for when that endpoint is unavailable.
-async function leftoverMultipartUploads(instance) {
+async function readD1StorageNodesForUninstall(instance) {
   try {
-    return await listIncompleteMultipartUploads(instance);
-  } catch {
-    return await pendingMultipartUploads(instance);
+    return await executeD1UninstallQuery(
+      instance,
+      `
+        SELECT id, account_id, bucket_name, worker_name,
+               managed_bucket, managed_worker
+        FROM storage_nodes
+        ORDER BY id
+      `,
+    );
+  } catch (error) {
+    const detail = String(error?.cloudflareOutput || error?.message || "");
+    if (/no such table:\s*storage_nodes/i.test(detail)) return [];
+    throw error;
   }
 }
 
-async function waitForMultipartUploadsToDrain(instance, startedAt) {
-  let remaining = await leftoverMultipartUploads(instance);
+function validatedCleanupRows(rows, requireUuidPrefixes) {
+  const uploads = [];
+  const prefixes = new Set();
+  for (const row of rows) {
+    const ownerId = String(row?.owner_id || "").toLowerCase();
+    if (ownerId) {
+      if (!UUID_PATTERN.test(ownerId)) {
+        if (requireUuidPrefixes) {
+          throw new Error("D1 中存在无效 owner UUID，已停止以保护共用 R2 存储桶。");
+        }
+      } else {
+        prefixes.add(`${ownerId}/`);
+      }
+    }
+    if (row?.record_type !== "upload") continue;
+    const uploadId =
+      typeof row.upload_id === "string" ? row.upload_id : "";
+    const storageKey =
+      typeof row.storage_key === "string" ? row.storage_key : "";
+    if (
+      !uploadId ||
+      !storageKey ||
+      uploadId.length > 1_024 ||
+      storageKey.length > 1_024 ||
+      /[\u0000\r\n]/.test(uploadId) ||
+      /[\u0000\r\n]/.test(storageKey)
+    ) {
+      throw new Error("D1 中存在无效分片上传记录，已停止以避免清理错误对象。");
+    }
+    if (requireUuidPrefixes) {
+      const ownerPrefix = storageKey.split("/", 1)[0].toLowerCase();
+      if (!UUID_PATTERN.test(ownerPrefix)) {
+        throw new Error("共用 R2 的分片 key 不以 owner UUID 开头，已停止卸载。");
+      }
+      prefixes.add(`${ownerPrefix}/`);
+    }
+    uploads.push({ storageKey, uploadId });
+  }
+  return {
+    uploads: [
+      ...new Map(
+        uploads.map((upload) => [
+          `${upload.storageKey}\u0000${upload.uploadId}`,
+          upload,
+        ]),
+      ).values(),
+    ].sort((left, right) => {
+      const leftKey = `${left.storageKey}\u0000${left.uploadId}`;
+      const rightKey = `${right.storageKey}\u0000${right.uploadId}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    }),
+    prefixes: [...prefixes].sort(),
+  };
+}
+
+async function storageCleanupPlan(instance, storageNodeId, managedBucket) {
+  const predicate = storageNodeId
+    ? `= '${storageNodeId}'`
+    : "IS NULL";
+  const modernSql = `
+    SELECT 'upload' AS record_type, owner_id, storage_key, upload_id
+    FROM multipart_uploads
+    WHERE storage_node_id ${predicate}
+    UNION ALL
+    SELECT 'owner' AS record_type, owner_id, '' AS storage_key, '' AS upload_id
+    FROM files
+    WHERE storage_node_id ${predicate} AND storage_key IS NOT NULL
+  `;
+  let rows;
+  try {
+    rows = await executeD1UninstallQuery(instance, modernSql);
+  } catch (error) {
+    if (storageNodeId || !/no such column:\s*storage_node_id/i.test(error.message)) {
+      throw error;
+    }
+    // Instances created before storage federation have no storage_node_id
+    // column; every object in those versions belongs to the primary bucket.
+    rows = await executeD1UninstallQuery(
+      instance,
+      `
+        SELECT 'upload' AS record_type, owner_id, storage_key, upload_id
+        FROM multipart_uploads
+        UNION ALL
+        SELECT 'owner' AS record_type, owner_id, '' AS storage_key, '' AS upload_id
+        FROM files
+        WHERE storage_key IS NOT NULL
+      `,
+    );
+  }
+  return validatedCleanupRows(rows, !managedBucket);
+}
+
+function purgeRoundCount(plan) {
+  const uploadRounds = Math.ceil(
+    plan.uploads.length / MAX_UPLOADS_PER_ROUND,
+  );
+  const prefixRounds = Math.ceil(
+    plan.prefixes.length / MAX_PREFIXES_PER_ROUND,
+  );
+  return Math.max(uploadRounds, prefixRounds, plan.purgeAll ? 1 : 0);
+}
+
+function assertPurgePlanFits(plan, label) {
+  const rounds = purgeRoundCount(plan);
+  if (rounds > MAX_PURGE_ROUNDS) {
+    throw new Error(
+      `${label} 需要 ${rounds} 轮边缘清理，超过本次安全上限。请先在网盘内清理部分文件后重试。`,
+    );
+  }
+}
+
+function purgeMarkerPrefix(prefixes, uploads) {
+  if (prefixes.length) return prefixes[0];
+  for (const upload of uploads) {
+    const ownerId = upload.storageKey.split("/", 1)[0].toLowerCase();
+    if (UUID_PATTERN.test(ownerId)) return `${ownerId}/`;
+  }
+  return "";
+}
+
+async function waitForPurgeMarker(
+  target,
+  profile,
+  configPath,
+  markerKey,
+  markerValue,
+) {
+  const startedAt = Date.now();
   let progressWidth = 0;
-  while (remaining.length > 0 && Date.now() - startedAt < PURGE_ROUND_TIMEOUT_MS) {
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
-    const waited = Math.round((Date.now() - startedAt) / 1000);
-    const line = `清除 all：等待云端清理残留分片…（已等待 ${waited} 秒）`;
+  while (Date.now() - startedAt < PURGE_ROUND_TIMEOUT_MS) {
+    const marker = await runWrangler(
+      [
+        "r2",
+        "object",
+        "get",
+        `${target.bucketName}/${markerKey}`,
+        "--pipe",
+        "--remote",
+        "--config",
+        configPath,
+      ],
+      target,
+      { profile },
+    );
+    if (marker.code === 0 && marker.stdout.trim() === markerValue) {
+      if (progressWidth > 0) {
+        process.stdout.write(`\r${" ".repeat(progressWidth)}\r`);
+      }
+      return;
+    }
+    if (
+      marker.code !== 0 &&
+      !isMissingCloudflareResource(marker.output)
+    ) {
+      throw new Error(
+        `无法检查边缘清理进度：${marker.output.trim().slice(-500)}`,
+      );
+    }
+    const waited = Math.round((Date.now() - startedAt) / 1_000);
+    const line = `等待 Cloudflare 边缘清理完成…（已等待 ${waited} 秒）`;
     progressWidth = Math.max(progressWidth, line.length);
     process.stdout.write(`\r${line}`);
-    remaining = await leftoverMultipartUploads(instance);
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
   if (progressWidth > 0) process.stdout.write(`\r${" ".repeat(progressWidth)}\r`);
-  return remaining;
+  throw new Error("Cloudflare 边缘清理助手启动超时；资源清单已保留，可稍后重试。");
+}
+
+function normalizePurgeRound(target, profileValue, round) {
+  const accountId = validateAccountId(target.accountId);
+  const bucketName = validateResourceName(target.bucketName, "清理目标 R2 存储桶");
+  const targetId = String(target.id || "").toLowerCase();
+  const profile = validateWranglerProfile(profileValue);
+  if (!UUID_PATTERN.test(targetId)) {
+    throw new Error("边缘清理目标 ID 无效，已停止以避免清理错误存储桶。");
+  }
+  if (
+    !round ||
+    typeof round !== "object" ||
+    typeof round.purgeAll !== "boolean" ||
+    !Array.isArray(round.uploads) ||
+    !Array.isArray(round.prefixes) ||
+    !Array.isArray(round.protectedKeys ?? [])
+  ) {
+    throw new Error("边缘清理计划无效，已停止。");
+  }
+  const uploads = round.uploads
+    .map((upload) => {
+      const storageKey =
+        typeof upload?.storageKey === "string" ? upload.storageKey : "";
+      const uploadId =
+        typeof upload?.uploadId === "string" ? upload.uploadId : "";
+      if (
+        !storageKey ||
+        !uploadId ||
+        storageKey.length > 1_024 ||
+        uploadId.length > 1_024 ||
+        /[\u0000\r\n]/.test(storageKey) ||
+        /[\u0000\r\n]/.test(uploadId)
+      ) {
+        throw new Error("边缘清理计划含有无效分片记录，已停止。");
+      }
+      return { storageKey, uploadId };
+    })
+    .sort((left, right) => {
+      const leftKey = `${left.storageKey}\u0000${left.uploadId}`;
+      const rightKey = `${right.storageKey}\u0000${right.uploadId}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  const prefixes = [
+    ...new Set(
+      round.prefixes.map((prefix) => {
+        const normalized = String(prefix || "").toLowerCase();
+        if (
+          !UUID_PATTERN.test(normalized.slice(0, -1)) ||
+          !normalized.endsWith("/")
+        ) {
+          throw new Error("边缘清理计划含有无效 owner UUID 前缀，已停止。");
+        }
+        return normalized;
+      }),
+    ),
+  ].sort();
+  const protectedKeys = [...new Set(round.protectedKeys ?? [])].map((key) => {
+    if (
+      typeof key !== "string" ||
+      key.length === 0 ||
+      key.length > 1_024 ||
+      /[\u0000\r\n]/.test(key)
+    ) {
+      throw new Error("边缘清理计划含有无效保护对象，已停止。");
+    }
+    return key;
+  });
+  if (uploads.length > MAX_UPLOADS_PER_ROUND) {
+    throw new Error("单轮分片清理数量超过安全上限，已停止。");
+  }
+  if (prefixes.length > MAX_PREFIXES_PER_ROUND) {
+    throw new Error("单轮前缀清理数量超过安全上限，已停止。");
+  }
+  if (round.purgeAll && prefixes.length) {
+    throw new Error("全量清理计划不能同时带有共用桶前缀，已停止。");
+  }
+  if (!round.purgeAll && protectedKeys.length) {
+    throw new Error("共用桶前缀清理不能带有桶级保护对象，已停止。");
+  }
+  if (!round.purgeAll && !purgeMarkerPrefix(prefixes, uploads)) {
+    throw new Error("共用 R2 清理缺少 owner UUID 前缀，已停止以保护其他数据。");
+  }
+  return {
+    accountId,
+    bucketName,
+    targetId,
+    profile,
+    purgeAll: round.purgeAll,
+    uploads,
+    prefixes,
+    protectedKeys,
+  };
+}
+
+function purgeRoundPlanHash(scope) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        accountId: scope.accountId,
+        bucketName: scope.bucketName,
+        targetId: scope.targetId,
+        profile: scope.profile,
+        purgeAll: scope.purgeAll,
+        uploads: scope.uploads,
+        prefixes: scope.prefixes,
+        protectedKeys: scope.protectedKeys,
+      }),
+    )
+    .digest("hex");
+}
+
+export function createPurgeHelperJournalEntry(target, profile, round) {
+  const scope = normalizePurgeRound(target, profile, round);
+  const markerPrefix = scope.purgeAll
+    ? ".r2-drive-uninstall/"
+    : purgeMarkerPrefix(scope.prefixes, scope.uploads);
+  return {
+    version: PURGE_HELPER_JOURNAL_VERSION,
+    operationId: randomBytes(16).toString("hex"),
+    accountId: scope.accountId,
+    bucketName: scope.bucketName,
+    targetId: scope.targetId,
+    profile: scope.profile,
+    planHash: purgeRoundPlanHash(scope),
+    workerName: `r2-drive-purge-${randomBytes(16).toString("hex")}`,
+    token: randomBytes(32).toString("base64url"),
+    markerKey: `${markerPrefix}purge-${randomBytes(12).toString("hex")}.json`,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export function validatePurgeHelperJournalEntry(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    value.version !== PURGE_HELPER_JOURNAL_VERSION ||
+    !/^[a-f0-9]{32}$/.test(value.operationId) ||
+    !ACCOUNT_ID_PATTERN.test(value.accountId) ||
+    !RESOURCE_NAME_PATTERN.test(value.bucketName) ||
+    !UUID_PATTERN.test(value.targetId) ||
+    !PROFILE_PATTERN.test(value.profile) ||
+    !SHA256_HEX_PATTERN.test(value.planHash) ||
+    !PURGE_HELPER_NAME_PATTERN.test(value.workerName) ||
+    !PURGE_HELPER_TOKEN_PATTERN.test(value.token) ||
+    !/^(?:\.r2-drive-uninstall\/|[0-9a-f-]{36}\/)purge-[a-f0-9]{24}\.json$/.test(
+      value.markerKey,
+    ) ||
+    typeof value.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(value.createdAt))
+  ) {
+    throw new Error("本机边缘清理 journal 无效，已停止以避免覆盖其他 Worker。");
+  }
+  return {
+    version: PURGE_HELPER_JOURNAL_VERSION,
+    operationId: value.operationId,
+    accountId: value.accountId.toLowerCase(),
+    bucketName: value.bucketName,
+    targetId: value.targetId.toLowerCase(),
+    profile: value.profile,
+    planHash: value.planHash,
+    workerName: value.workerName,
+    token: value.token,
+    markerKey: value.markerKey.toLowerCase(),
+    createdAt: value.createdAt,
+  };
+}
+
+function assertPurgeJournalMatches(operationValue, target, profile, round) {
+  const operation = validatePurgeHelperJournalEntry(operationValue);
+  const scope = normalizePurgeRound(target, profile, round);
+  const expectedMarkerPrefix = scope.purgeAll
+    ? ".r2-drive-uninstall/"
+    : purgeMarkerPrefix(scope.prefixes, scope.uploads);
+  if (
+    operation.accountId !== scope.accountId ||
+    operation.bucketName !== scope.bucketName ||
+    operation.targetId !== scope.targetId ||
+    operation.profile !== scope.profile ||
+    operation.planHash !== purgeRoundPlanHash(scope) ||
+    !operation.markerKey.startsWith(expectedMarkerPrefix)
+  ) {
+    throw new Error(
+      "本机仍有另一项未完成的边缘清理 journal；为避免接管错误 Worker，已停止卸载。",
+    );
+  }
+  return { operation, scope };
+}
+
+async function readPurgeHelperJournal() {
+  try {
+    return validatePurgeHelperJournalEntry(
+      JSON.parse(await readFile(PURGE_HELPER_JOURNAL_PATH, "utf8")),
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    if (error instanceof SyntaxError) {
+      throw new Error(
+        "本机边缘清理 journal 已损坏，已停止以避免覆盖其他 Worker。",
+      );
+    }
+    throw error;
+  }
+}
+
+async function loadOrCreatePurgeHelperOperation(target, profile, round) {
+  const existing = await readPurgeHelperJournal();
+  if (existing) {
+    return {
+      ...assertPurgeJournalMatches(existing, target, profile, round),
+      resumed: true,
+    };
+  }
+  const proposed = createPurgeHelperJournalEntry(target, profile, round);
+  await mkdir(path.dirname(PURGE_HELPER_JOURNAL_PATH), {
+    recursive: true,
+    mode: 0o700,
+  });
+  let file;
+  try {
+    file = await open(PURGE_HELPER_JOURNAL_PATH, "wx", 0o600);
+    await file.writeFile(`${JSON.stringify(proposed, null, 2)}\n`, "utf8");
+    await file.sync();
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  } finally {
+    await file?.close();
+  }
+  const stored = await readPurgeHelperJournal();
+  if (!stored) {
+    throw new Error("本机边缘清理 journal 未能持久化，尚未修改 Cloudflare。");
+  }
+  return {
+    ...assertPurgeJournalMatches(stored, target, profile, round),
+    resumed: stored.operationId !== proposed.operationId,
+  };
+}
+
+async function clearPurgeHelperJournal(operation) {
+  const stored = await readPurgeHelperJournal();
+  if (!stored) return;
+  if (
+    stored.operationId !== operation.operationId ||
+    stored.token !== operation.token
+  ) {
+    throw new Error("边缘清理 journal 已被另一进程更改，未删除本机记录。");
+  }
+  await rm(PURGE_HELPER_JOURNAL_PATH);
+}
+
+function purgeHelperVariables(operation, scope) {
+  return {
+    PURGE_UPLOADS: JSON.stringify(scope.uploads),
+    PURGE_ALL: scope.purgeAll ? "true" : "false",
+    PURGE_PREFIXES: JSON.stringify(scope.prefixes),
+    PURGE_PROTECTED_KEYS: JSON.stringify(scope.protectedKeys),
+    PURGE_MARKER_KEY: operation.markerKey,
+    PURGE_MARKER_VALUE: operation.token,
+    PURGE_HELPER_TOKEN: operation.token,
+    PURGE_EXPECTED_BUCKET: scope.bucketName,
+    PURGE_PLAN_HASH: operation.planHash,
+  };
+}
+
+function purgeHelperIdentityError(workerName) {
+  return new Error(
+    `同名 Worker ${workerName} 无法通过原随机 token 和 R2 绑定验证；已拒绝覆盖或删除。`,
+  );
+}
+
+export function assertTemporaryPurgeWorkerIdentity(
+  operationValue,
+  target,
+  profile,
+  round,
+  deployment,
+  version,
+) {
+  const { operation, scope } = assertPurgeJournalMatches(
+    operationValue,
+    target,
+    profile,
+    round,
+  );
+  const activeVersions = Array.isArray(deployment?.versions)
+    ? deployment.versions
+    : [];
+  if (
+    activeVersions.length !== 1 ||
+    Number(activeVersions[0]?.percentage) !== 100 ||
+    !UUID_PATTERN.test(String(activeVersions[0]?.version_id || ""))
+  ) {
+    throw purgeHelperIdentityError(operation.workerName);
+  }
+  const versionId = String(activeVersions[0].version_id).toLowerCase();
+  const bindings = Array.isArray(version?.resources?.bindings)
+    ? version.resources.bindings
+    : [];
+  const handlers = Array.isArray(version?.resources?.script?.handlers)
+    ? version.resources.script.handlers
+    : [];
+  if (
+    String(version?.id || "").toLowerCase() !== versionId ||
+    !handlers.includes("scheduled")
+  ) {
+    throw purgeHelperIdentityError(operation.workerName);
+  }
+  const expectedVariables = purgeHelperVariables(operation, scope);
+  for (const [name, expected] of Object.entries(expectedVariables)) {
+    const matches = bindings.filter(
+      (binding) => binding?.type === "plain_text" && binding.name === name,
+    );
+    if (matches.length !== 1 || matches[0].text !== expected) {
+      throw purgeHelperIdentityError(operation.workerName);
+    }
+  }
+  const r2Bindings = bindings.filter(
+    (binding) => binding?.type === "r2_bucket",
+  );
+  if (
+    r2Bindings.length !== 1 ||
+    r2Bindings[0].name !== "FILES" ||
+    r2Bindings[0].bucket_name !== scope.bucketName
+  ) {
+    throw purgeHelperIdentityError(operation.workerName);
+  }
+  return { operation, scope, versionId };
+}
+
+async function inspectTemporaryPurgeWorker(
+  target,
+  profile,
+  operation,
+  round,
+  configPath,
+) {
+  const status = await runWrangler(
+    [
+      "deployments",
+      "status",
+      "--name",
+      operation.workerName,
+      "--json",
+      "--config",
+      configPath,
+    ],
+    target,
+    { profile },
+  );
+  if (status.code !== 0) {
+    if (isMissingCloudflareResource(status.output)) return { missing: true };
+    throw new Error(
+      `无法核对临时边缘清理 Worker：${status.output.trim().slice(-400)}`,
+    );
+  }
+  let deployment;
+  try {
+    deployment = parseWranglerJson(status.output, "Wrangler Worker deployment");
+  } catch {
+    throw purgeHelperIdentityError(operation.workerName);
+  }
+  const activeVersions = Array.isArray(deployment?.versions)
+    ? deployment.versions
+    : [];
+  const versionId =
+    activeVersions.length === 1
+      ? String(activeVersions[0]?.version_id || "")
+      : "";
+  if (!UUID_PATTERN.test(versionId)) {
+    throw purgeHelperIdentityError(operation.workerName);
+  }
+  const viewed = await runWrangler(
+    [
+      "versions",
+      "view",
+      versionId,
+      "--name",
+      operation.workerName,
+      "--json",
+      "--config",
+      configPath,
+    ],
+    target,
+    { profile },
+  );
+  if (viewed.code !== 0) {
+    throw new Error("无法读取临时边缘清理 Worker 的版本身份，已停止。");
+  }
+  let version;
+  try {
+    version = parseWranglerJson(viewed.output, "Wrangler Worker version");
+  } catch {
+    throw purgeHelperIdentityError(operation.workerName);
+  }
+  assertTemporaryPurgeWorkerIdentity(
+    operation,
+    target,
+    profile,
+    round,
+    deployment,
+    version,
+  );
+  return { missing: false };
+}
+
+export async function waitForTemporaryPurgeWorkerIdentity(
+  target,
+  profile,
+  operation,
+  round,
+  configPath,
+  hooks = {},
+) {
+  const inspect = hooks.inspect ?? inspectTemporaryPurgeWorker;
+  const wait =
+    hooks.wait ??
+    ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const inspected = await inspect(
+      target,
+      profile,
+      operation,
+      round,
+      configPath,
+    );
+    if (!inspected.missing || attempt === 5) return inspected;
+    await wait(500 * 2 ** attempt);
+  }
+  return { missing: true };
+}
+
+async function readPurgeArtifact(
+  target,
+  profile,
+  configPath,
+  objectKey,
+  expectedValue,
+) {
+  const result = await runWrangler(
+    [
+      "r2",
+      "object",
+      "get",
+      `${target.bucketName}/${objectKey}`,
+      "--pipe",
+      "--remote",
+      "--config",
+      configPath,
+    ],
+    target,
+    { profile },
+  );
+  if (result.code !== 0) {
+    if (isMissingCloudflareResource(result.output)) return false;
+    throw new Error(
+      `无法核对边缘清理标记：${result.output.trim().slice(-400)}`,
+    );
+  }
+  if (result.stdout.trim() !== expectedValue) {
+    throw new Error("边缘清理标记内容与本机 journal 不匹配，已停止。");
+  }
+  return true;
+}
+
+async function readPurgeArtifactState(
+  target,
+  profile,
+  operation,
+  configPath,
+) {
+  const [completed, locked] = await Promise.all([
+    readPurgeArtifact(
+      target,
+      profile,
+      configPath,
+      operation.markerKey,
+      operation.token,
+    ),
+    readPurgeArtifact(
+      target,
+      profile,
+      configPath,
+      `${operation.markerKey}.lock`,
+      operation.token,
+    ),
+  ]);
+  return { completed, locked };
+}
+
+async function cleanupTemporaryPurgeArtifacts(
+  target,
+  profile,
+  operation,
+  configPath,
+) {
+  const state = await readPurgeArtifactState(
+    target,
+    profile,
+    operation,
+    configPath,
+  );
+  for (const [cleanupKey, exists] of [
+    [operation.markerKey, state.completed],
+    [`${operation.markerKey}.lock`, state.locked],
+  ]) {
+    if (!exists) continue;
+    const markerRemoved = await runWrangler(
+      [
+        "r2",
+        "object",
+        "delete",
+        `${target.bucketName}/${cleanupKey}`,
+        "--remote",
+        "--force",
+        "--config",
+        configPath,
+      ],
+      target,
+      { profile },
+    );
+    if (
+      markerRemoved.code !== 0 &&
+      !isMissingCloudflareResource(markerRemoved.output)
+    ) {
+      throw new Error(
+        `边缘清理标记未能删除：${markerRemoved.output.trim().slice(-400)}`,
+      );
+    }
+  }
+}
+
+async function removeTemporaryPurgeWorker(
+  target,
+  profile,
+  operation,
+  round,
+  configPath,
+) {
+  let lastOutput = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const inspected = await inspectTemporaryPurgeWorker(
+      target,
+      profile,
+      operation,
+      round,
+      configPath,
+    );
+    if (inspected.missing) return;
+    const removed = await runWrangler(
+      ["delete", operation.workerName, "--force", "--config", configPath],
+      target,
+      { profile },
+    );
+    if (
+      removed.code === 0 ||
+      isMissingCloudflareResource(removed.output)
+    ) {
+      return;
+    }
+    lastOutput = removed.output;
+    await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+  }
+  throw new Error(
+    `临时边缘清理 Worker 未能删除：${lastOutput.trim().slice(-400)}`,
+  );
+}
+
+function redactPurgeHelperOutput(output, operation) {
+  return String(output).split(operation.token).join("[已隐藏随机 token]");
 }
 
 // The temporary helper runs from a cron trigger entirely at Cloudflare's edge.
-// This avoids `wrangler dev --remote`, whose local preview connection cannot
-// start on proxy-only networks.
-async function abortMultipartUploadsOnEdge(instance, uploads) {
+// Its random name and identity token are persisted before deployment. A retry
+// never overwrites an existing name: it first proves that the active version
+// has the journal token and the exact intended R2 binding.
+async function purgeR2Round(target, profile, round) {
+  const { operation, scope, resumed } =
+    await loadOrCreatePurgeHelperOperation(target, profile, round);
   const workspace = await mkdtemp(path.join(tmpdir(), "r2-drive-purge-"));
   const configPath = path.join(workspace, "wrangler.jsonc");
   const helperPath = path.join(workspace, "uninstall-worker.mjs");
-  const workerName = `r2-drive-purge-${randomBytes(6).toString("hex")}`;
+  const variables = purgeHelperVariables(operation, scope);
+  let trustedWorker = false;
+  let purgeCompleted = false;
+  let primaryError;
 
   try {
     await Promise.all([
@@ -663,15 +1679,17 @@ async function abortMultipartUploadsOnEdge(instance, uploads) {
         configPath,
         `${JSON.stringify(
           {
-            name: workerName,
+            name: operation.workerName,
             main: helperPath,
             compatibility_date: "2025-01-01",
-            account_id: instance.accountId,
+            account_id: scope.accountId,
             workers_dev: false,
             preview_urls: false,
             triggers: { crons: ["* * * * *"] },
-            vars: { PURGE_UPLOADS: JSON.stringify(uploads) },
-            r2_buckets: [{ binding: "FILES", bucket_name: instance.r2Name }],
+            vars: variables,
+            r2_buckets: [
+              { binding: "FILES", bucket_name: scope.bucketName },
+            ],
           },
           null,
           2,
@@ -680,86 +1698,707 @@ async function abortMultipartUploadsOnEdge(instance, uploads) {
       ),
       writeFile(
         helperPath,
-        await readFile(path.join(ROOT, "scripts", "uninstall-worker.mjs"), "utf8"),
+        await readFile(
+          path.join(ROOT, "scripts", "uninstall-worker.mjs"),
+          "utf8",
+        ),
         { mode: 0o600 },
       ),
     ]);
 
-    const deployed = await runWrangler(["deploy", "--config", configPath], instance);
-    if (deployed.code !== 0) {
-      throw new Error(
-        `Cloudflare 清理助手部署失败：${deployed.output.trim().slice(-500)}`,
-      );
-    }
-    return await waitForMultipartUploadsToDrain(instance, Date.now());
-  } finally {
-    const removed = await runWrangler(
-      ["delete", workerName, "--force", "--config", configPath],
-      instance,
+    const artifacts = await readPurgeArtifactState(
+      target,
+      profile,
+      operation,
+      configPath,
     );
-    if (removed.code !== 0 && !isMissingCloudflareResource(removed.output)) {
-      console.log(
-        `⚠ 临时清理助手 ${workerName} 没能自动删除，请在 Cloudflare 控制台的 Workers 列表里手动删除它。`,
+    const inspected = await inspectTemporaryPurgeWorker(
+      target,
+      profile,
+      operation,
+      round,
+      configPath,
+    );
+    if (artifacts.completed) {
+      purgeCompleted = true;
+      trustedWorker = !inspected.missing;
+    } else if (!inspected.missing) {
+      trustedWorker = true;
+      if (resumed) {
+        console.log(
+          `继续等待已验证的边缘清理助手 ${operation.workerName}…`,
+        );
+      }
+    } else {
+      // A prior verified helper may have been removed after an interrupted
+      // invocation. Only journal-token artifacts are cleared before retrying.
+      await cleanupTemporaryPurgeArtifacts(
+        target,
+        profile,
+        operation,
+        configPath,
+      );
+      // Recheck immediately after artifact cleanup so even two concurrent
+      // local retries cannot use deploy as an overwrite operation.
+      const beforeDeploy = await inspectTemporaryPurgeWorker(
+        target,
+        profile,
+        operation,
+        round,
+        configPath,
+      );
+      if (!beforeDeploy.missing) {
+        trustedWorker = true;
+        console.log(
+          `继续使用另一卸载进程已部署并验证的边缘清理助手 ${operation.workerName}…`,
+        );
+      } else {
+        const deployed = await runWrangler(
+          ["deploy", "--config", configPath],
+          target,
+          { profile },
+        );
+        const afterDeploy = await waitForTemporaryPurgeWorkerIdentity(
+          target,
+          profile,
+          operation,
+          round,
+          configPath,
+        );
+        if (afterDeploy.missing) {
+          throw new Error(
+            `Cloudflare 清理助手部署失败：${redactPurgeHelperOutput(
+              deployed.output,
+              operation,
+            )
+              .trim()
+              .slice(-400)}`,
+          );
+        }
+        trustedWorker = true;
+        if (deployed.code !== 0) {
+          console.log("Wrangler 返回中断，但已验证云端清理助手部署成功，继续执行。");
+        }
+      }
+    }
+
+    if (!purgeCompleted) {
+      await waitForPurgeMarker(
+        target,
+        profile,
+        configPath,
+        operation.markerKey,
+        operation.token,
+      );
+      purgeCompleted = true;
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+
+  let cleanupError;
+  try {
+    if (trustedWorker) {
+      await removeTemporaryPurgeWorker(
+        target,
+        profile,
+        operation,
+        round,
+        configPath,
       );
     }
+    if (trustedWorker || purgeCompleted) {
+      await cleanupTemporaryPurgeArtifacts(
+        target,
+        profile,
+        operation,
+        configPath,
+      );
+    }
+    if (purgeCompleted && !primaryError) {
+      await clearPurgeHelperJournal(operation);
+    }
+  } catch (error) {
+    cleanupError = error;
+  } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+
+  if (primaryError && cleanupError) {
+    throw new Error(
+      `${primaryError instanceof Error ? primaryError.message : String(primaryError)}；${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+    );
+  }
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
 }
 
-async function purgeAllR2Data(instance) {
-  let remaining = await leftoverMultipartUploads(instance);
-  if (remaining.length === 0) return;
-
+async function purgeAllR2Data(target, cleanup, purgeAll = true) {
+  const protectedKeys = purgeAll
+    ? Array.isArray(target.purgeProtectedKeys)
+      ? target.purgeProtectedKeys
+      : target.bucketOwnershipMarkerKey
+        ? [target.bucketOwnershipMarkerKey]
+        : []
+    : [];
+  const plan = {
+    uploads: cleanup.uploads,
+    prefixes: purgeAll ? [] : cleanup.prefixes,
+    purgeAll,
+  };
+  const rounds = purgeRoundCount(plan);
+  if (rounds === 0) return;
+  assertPurgePlanFits(plan, target.bucketName);
   console.log(
-    `检测到 R2 桶仍非空，正在执行清除 all（${remaining.length} 个残留分片上传）…`,
+    purgeAll
+      ? `正在执行清除 all：${target.bucketName} 的普通对象和 ${cleanup.uploads.length} 个分片任务…`
+      : `正在清理共用桶中 ${cleanup.prefixes.length} 个本实例 owner UUID 前缀和 ${cleanup.uploads.length} 个分片任务…`,
   );
   console.log(
     "云端清理由定时任务触发，第一次通常需要等待约 1 分钟，请不要关闭窗口。",
   );
 
-  for (let round = 0; round < MAX_PURGE_ROUNDS && remaining.length > 0; round += 1) {
-    const before = remaining.length;
-    remaining = await abortMultipartUploadsOnEdge(
-      instance,
-      remaining.slice(0, MAX_UPLOADS_PER_ROUND),
+  for (let round = 0; round < rounds; round += 1) {
+    const uploads = plan.uploads.slice(
+      round * MAX_UPLOADS_PER_ROUND,
+      (round + 1) * MAX_UPLOADS_PER_ROUND,
     );
-    if (remaining.length >= before) break;
-  }
-
-  if (remaining.length > 0) {
-    throw new Error(
-      `Cloudflare 仍有 ${remaining.length} 个残留分片上传没有清除，R2 存储桶暂时无法删除。请稍后重新选择相同操作；若一直失败，可在 Cloudflare 控制台手动删除存储桶 ${instance.r2Name}。`,
+    const prefixes = plan.prefixes.slice(
+      round * MAX_PREFIXES_PER_ROUND,
+      (round + 1) * MAX_PREFIXES_PER_ROUND,
     );
+    if (!purgeAll && prefixes.length === 0 && uploads.length > 0) {
+      const uploadPrefix = purgeMarkerPrefix([], uploads);
+      if (uploadPrefix) prefixes.push(uploadPrefix);
+    }
+    await purgeR2Round(target, target.profile ?? "default", {
+      uploads,
+      prefixes,
+      purgeAll,
+      protectedKeys,
+    });
   }
-  console.log("✓ 清除 all 完成：残留分片上传已全部 abort。");
+  console.log("✓ 边缘清理完成：目标范围内的普通对象和分片任务均已处理。");
 }
 
-async function deleteR2(instance, alreadyMissing = false) {
-  console.log(`[2/3] 正在清空并删除 R2 存储桶 ${instance.r2Name}…`);
-  if (alreadyMissing) {
-    console.log("✓ R2 存储桶已经不存在。");
-    return;
-  }
-  const emptied = await emptyR2Bucket(instance);
-  if (emptied.deleted > 0) process.stdout.write("\n");
-  if (emptied.missing) {
-    console.log("✓ R2 存储桶已经不存在。");
-    return;
-  }
-  let result = await runWrangler(
-    ["r2", "bucket", "delete", instance.r2Name],
-    instance,
+async function deleteR2(
+  instance,
+  ownership,
+  alreadyMissing = false,
+  cleanup = { uploads: [], prefixes: [] },
+) {
+  console.log(
+    ownership.managedBucket
+      ? `正在清空并删除主 R2 存储桶 ${instance.r2Name}…`
+      : `正在清理复用的主 R2 存储桶 ${instance.r2Name} 中本实例的数据…`,
   );
-  if (result.code !== 0 && isR2BucketNotEmpty(result.output)) {
-    await purgeAllR2Data(instance);
-    const finalEmpty = await emptyR2Bucket(instance);
-    if (finalEmpty.deleted > 0) process.stdout.write("\n");
-    result = await runWrangler(["r2", "bucket", "delete", instance.r2Name], instance);
+  if (alreadyMissing) {
+    console.log("✓ 主 R2 存储桶已经不存在。");
+    return;
   }
-  if (result.code !== 0 && !isMissingCloudflareResource(result.output)) {
-    throw new Error(`R2 存储桶未能删除：${result.output.trim().slice(-500)}`);
+  const target = {
+    id: ownership.installId,
+    accountId: instance.accountId,
+    bucketName: instance.r2Name,
+    profile: "default",
+    purgeProtectedKeys: [ownership.bucketMarkerKey],
+  };
+
+  if (!ownership.managedBucket) {
+    await purgeAllR2Data(target, cleanup, false);
+    console.log(
+      "✓ 已清除复用桶中的本实例 owner UUID 前缀；随机归属标记会在 exact D1 删除成功后移除，存储桶和其他配置均保留。",
+    );
+    return;
   }
-  console.log("✓ R2 存储桶及其中所有文件已删除。");
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await purgeAllR2Data(target, cleanup, true);
+    await removePrimaryBucketOwnershipMarker(ownership);
+    const result = await runWrangler(
+      ["r2", "bucket", "delete", instance.r2Name],
+      instance,
+    );
+    if (result.code === 0 || isMissingCloudflareResource(result.output)) {
+      console.log("✓ 主 R2 存储桶及其中所有文件已删除。");
+      return;
+    }
+
+    try {
+      await restorePrimaryBucketOwnershipMarker(ownership);
+    } catch (restoreError) {
+      throw new Error(
+        `R2 存储桶未能删除：${result.output.trim().slice(-400)}；${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+      );
+    }
+    if (attempt === 0 && isR2BucketNotEmpty(result.output)) {
+      console.log("主 R2 在最终删除窗口仍有对象，已恢复归属标记并重新清理。");
+      continue;
+    }
+    throw new Error(
+      `R2 存储桶未能删除，归属标记已恢复，可安全重试：${result.output.trim().slice(-500)}`,
+    );
+  }
+}
+
+async function finalizeReusedPrimaryBucket(
+  ownership,
+  alreadyMissing = false,
+) {
+  if (ownership.managedBucket || alreadyMissing) return;
+  await removePrimaryBucketOwnershipMarker(ownership);
+  console.log("✓ 复用主 R2 的随机归属标记已删除，其他数据和桶级配置保持不变。");
+}
+
+let storageFederationPrivateKey;
+let storageIdentityDispatcher;
+
+async function readStorageFederationPrivateKey() {
+  if (storageFederationPrivateKey) return storageFederationPrivateKey;
+  let parsed;
+  try {
+    parsed = JSON.parse(
+      await readFile(STORAGE_POOL_PRIVATE_JWK_PATH, "utf8"),
+    );
+  } catch {
+    throw new Error(
+      "本机联合存储私钥缺失或损坏，无法验证节点 Worker 身份；已停止卸载。",
+    );
+  }
+  if (
+    parsed?.kty !== "EC" ||
+    parsed?.crv !== "P-256" ||
+    typeof parsed.x !== "string" ||
+    typeof parsed.y !== "string" ||
+    typeof parsed.d !== "string"
+  ) {
+    throw new Error(
+      "本机联合存储私钥格式无效，无法验证节点 Worker 身份；已停止卸载。",
+    );
+  }
+  try {
+    storageFederationPrivateKey = createPrivateKey({
+      key: parsed,
+      format: "jwk",
+    });
+  } catch {
+    throw new Error(
+      "本机联合存储私钥无法载入，无法验证节点 Worker 身份；已停止卸载。",
+    );
+  }
+  return storageFederationPrivateKey;
+}
+
+async function fetchStorageNodeIdentity(url, options) {
+  const { EnvHttpProxyAgent, fetch: undiciFetch } = await import("undici");
+  storageIdentityDispatcher ??= new EnvHttpProxyAgent();
+  return undiciFetch(url, {
+    ...options,
+    dispatcher: storageIdentityDispatcher,
+  });
+}
+
+async function readBoundedIdentityJson(response) {
+  const maxBytes = 64 * 1024;
+  const declaredLength = response.headers.get("content-length");
+  if (
+    declaredLength &&
+    (!/^[0-9]+$/.test(declaredLength) ||
+      Number(declaredLength) > maxBytes)
+  ) {
+    await response.body?.cancel();
+    throw new Error("节点 Worker 身份响应过大。");
+  }
+  if (!response.body) throw new Error("节点 Worker 身份响应为空。");
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("节点 Worker 身份响应过大。");
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+  } catch {
+    throw new Error("节点 Worker 身份响应不是有效 JSON。");
+  }
+}
+
+async function readPrimaryBucketOwnershipMarker(ownership) {
+  const outputPath = path.join(
+    ROOT,
+    ".wrangler",
+    "uninstall",
+    `primary-bucket-${ownership.installId}.json`,
+  );
+  await mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  await rm(outputPath, { force: true });
+  try {
+    const result = await runWrangler(
+      [
+        "r2",
+        "object",
+        "get",
+        `${ownership.r2Name}/${encodeR2ObjectKey(ownership.bucketMarkerKey)}`,
+        "--file",
+        outputPath,
+        "--remote",
+        "--config",
+        CONFIG_PATH,
+      ],
+      {
+        accountId: ownership.accountId,
+        bucketName: ownership.r2Name,
+      },
+    );
+    if (result.code !== 0) {
+      throw new Error(
+        `主 R2 存储桶 ${ownership.r2Name} 缺少原随机归属标记；它可能已被同名重建，未执行任何删除。`,
+      );
+    }
+    const markerStat = await stat(outputPath);
+    if (!markerStat.isFile() || markerStat.size > 4 * 1024) {
+      throw new Error("主 R2 归属标记内容异常，未执行任何删除。");
+    }
+    const markerBody = await readFile(outputPath, "utf8");
+    assertPrimaryBucketOwnership(ownership, markerBody);
+    return markerBody;
+  } finally {
+    await rm(outputPath, { force: true });
+  }
+}
+
+async function assertPrimaryBucketCreationDate(ownership) {
+  if (!ownership.bucketCreationDate) {
+    throw new Error(
+      "本机主 R2 归属凭证缺少创建时间，不能排除同名重建；未执行任何删除。",
+    );
+  }
+  const result = await runWrangler(
+    [
+      "r2",
+      "bucket",
+      "info",
+      ownership.r2Name,
+      "--json",
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      accountId: ownership.accountId,
+      bucketName: ownership.r2Name,
+    },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `无法复核主 R2 创建时间：${result.output.trim().slice(-400)}`,
+    );
+  }
+  const payload = parseWranglerJson(result.output, "Wrangler R2 bucket");
+  const observed = String(
+    payload?.creation_date ?? payload?.result?.creation_date ?? "",
+  );
+  if (
+    !observed ||
+    !Number.isFinite(Date.parse(observed)) ||
+    Date.parse(observed) !== Date.parse(ownership.bucketCreationDate)
+  ) {
+    throw new Error(
+      "主 R2 创建时间与原安装记录不一致；它可能已被同名重建，未执行任何删除。",
+    );
+  }
+}
+
+async function verifyPrimaryBucketForUninstall(ownership) {
+  await readPrimaryBucketOwnershipMarker(ownership);
+  await assertPrimaryBucketCreationDate(ownership);
+}
+
+async function verifyPrimaryWorkerForUninstall(ownership, instance) {
+  if (!instance.customHostname) {
+    throw new Error(
+      "本机配置缺少原 Worker 域名，无法完成随机挑战身份验证；未执行任何删除。",
+    );
+  }
+  const challenge = createPrimaryWorkerChallenge();
+  const endpoint = new URL(
+    PRIMARY_WORKER_IDENTITY_PATH,
+    `https://${instance.customHostname}`,
+  );
+  endpoint.searchParams.set("challenge", challenge);
+  let response;
+  try {
+    response = await fetchStorageNodeIdentity(endpoint, {
+      method: "GET",
+      redirect: "manual",
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    throw new Error(
+      `无法连接主 Worker ${instance.workerName} 完成随机挑战；未执行任何删除。`,
+    );
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(
+      `主 Worker ${instance.workerName} 未接受原安装随机挑战（HTTP ${response.status}）；未执行任何删除。`,
+    );
+  }
+  assertPrimaryWorkerOwnership(
+    ownership,
+    challenge,
+    await readBoundedIdentityJson(response),
+  );
+}
+
+async function restorePrimaryBucketOwnershipMarker(ownership) {
+  const result = await runWrangler(
+    [
+      "r2",
+      "object",
+      "put",
+      `${ownership.r2Name}/${encodeR2ObjectKey(ownership.bucketMarkerKey)}`,
+      "--pipe",
+      "--remote",
+      "--force",
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      accountId: ownership.accountId,
+      bucketName: ownership.r2Name,
+    },
+    { input: primaryBucketOwnershipBody(ownership) },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `主 R2 清理失败后，归属标记也未能恢复：${result.output.trim().slice(-400)}`,
+    );
+  }
+  await verifyPrimaryBucketForUninstall(ownership);
+}
+
+async function removePrimaryBucketOwnershipMarker(ownership) {
+  await verifyPrimaryBucketForUninstall(ownership);
+  const result = await runWrangler(
+    [
+      "r2",
+      "object",
+      "delete",
+      `${ownership.r2Name}/${encodeR2ObjectKey(ownership.bucketMarkerKey)}`,
+      "--remote",
+      "--force",
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      accountId: ownership.accountId,
+      bucketName: ownership.r2Name,
+    },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `主 R2 归属标记未能删除：${result.output.trim().slice(-400)}`,
+    );
+  }
+}
+
+async function verifyStorageNodeWorkerForUninstall(node) {
+  if (!node.endpoint) {
+    throw new Error(
+      `节点 Worker ${node.workerName} 缺少已登记 workers.dev 地址，无法证明资源归属；已停止卸载。`,
+    );
+  }
+  const timestamp = Math.floor(Date.now() / 1_000);
+  const nonce = randomBytes(16).toString("base64url");
+  const canonical = [
+    STORAGE_CAPABILITY_PREFIX,
+    node.id,
+    "GET",
+    "/v1/health",
+    String(timestamp),
+    nonce,
+    STORAGE_CAPABILITY_UNSIGNED_BODY,
+    "",
+  ].join("\n");
+  const signature = signBytes(
+    "sha256",
+    Buffer.from(canonical, "utf8"),
+    {
+      key: await readStorageFederationPrivateKey(),
+      dsaEncoding: "ieee-p1363",
+    },
+  ).toString("base64url");
+  let response;
+  try {
+    response = await fetchStorageNodeIdentity(
+      new URL("/v1/health", node.endpoint),
+      {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          "x-r2drive-capability-version": STORAGE_CAPABILITY_VERSION,
+          "x-r2drive-node-id": node.id,
+          "x-r2drive-timestamp": String(timestamp),
+          "x-r2drive-nonce": nonce,
+          "x-r2drive-body-sha256": STORAGE_CAPABILITY_UNSIGNED_BODY,
+          "x-r2drive-signature": signature,
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+  } catch {
+    throw new Error(
+      `无法连接节点 Worker ${node.workerName} 完成安装身份验证；已停止卸载。`,
+    );
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(
+      `节点 Worker ${node.workerName} 未接受原安装签名（HTTP ${response.status}）；已停止卸载。`,
+    );
+  }
+  assertStorageNodeWorkerIdentity(
+    node,
+    await readBoundedIdentityJson(response),
+  );
+}
+
+async function readManagedBucketOwnershipMarker(node) {
+  const outputPath = path.join(
+    path.dirname(node.configPath),
+    `${node.id}.bucket-ownership`,
+  );
+  await rm(outputPath, { force: true });
+  try {
+    const result = await runWrangler(
+      [
+        "r2",
+        "object",
+        "get",
+        `${node.bucketName}/${encodeR2ObjectKey(node.bucketOwnershipMarkerKey)}`,
+        "--file",
+        outputPath,
+        "--remote",
+        "--config",
+        node.configPath,
+      ],
+      node,
+      { profile: node.profile },
+    );
+    if (result.code !== 0) {
+      throw new Error(
+        `受管 R2 存储桶 ${node.bucketName} 缺少可验证的随机归属标记；它可能已被同名重建，已停止卸载。`,
+      );
+    }
+    const markerStat = await stat(outputPath);
+    if (!markerStat.isFile() || markerStat.size > 4 * 1024) {
+      throw new Error(
+        `受管 R2 存储桶 ${node.bucketName} 的归属标记内容异常，已停止卸载。`,
+      );
+    }
+    const markerBody = await readFile(outputPath, "utf8");
+    assertManagedBucketOwnership(node, markerBody);
+    return markerBody;
+  } finally {
+    await rm(outputPath, { force: true });
+  }
+}
+
+async function restoreManagedBucketOwnershipMarker(node) {
+  const markerBody = storageBucketOwnershipBody(node);
+  const result = await runWrangler(
+    [
+      "r2",
+      "object",
+      "put",
+      `${node.bucketName}/${encodeR2ObjectKey(node.bucketOwnershipMarkerKey)}`,
+      "--pipe",
+      "--remote",
+      "--force",
+      "--config",
+      node.configPath,
+    ],
+    node,
+    { profile: node.profile, input: markerBody },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `受管 R2 存储桶 ${node.bucketName} 清理失败后，归属标记也未能恢复：${result.output.trim().slice(-400)}`,
+    );
+  }
+  await readManagedBucketOwnershipMarker(node);
+}
+
+async function inspectBucketForUninstall(target, profile, configPath) {
+  const loginProbe = await runWrangler(
+    ["r2", "bucket", "list", "--config", configPath],
+    target,
+    { profile },
+  );
+  if (loginProbe.code !== 0) {
+    throw new Error(
+      `Wrangler 登录 ${profile} 无法访问账号 ${target.accountId} 的 R2：${loginProbe.output.trim().slice(-400)}`,
+    );
+  }
+  const info = await runWrangler(
+    [
+      "r2",
+      "bucket",
+      "info",
+      target.bucketName,
+      "--json",
+      "--config",
+      configPath,
+    ],
+    target,
+    { profile },
+  );
+  if (info.code === 0) return false;
+  if (isMissingCloudflareResource(info.output)) return true;
+  throw new Error(
+    `无法核对 R2 存储桶 ${target.bucketName}：${info.output.trim().slice(-400)}`,
+  );
+}
+
+async function inspectWorkerForUninstall(target, profile, configPath) {
+  const status = await runWrangler(
+    [
+      "deployments",
+      "status",
+      "--name",
+      target.workerName,
+      "--json",
+      "--config",
+      configPath,
+    ],
+    target,
+    { profile },
+  );
+  if (status.code === 0) return false;
+  if (isMissingCloudflareResource(status.output)) return true;
+  throw new Error(
+    `Wrangler 登录 ${profile} 无法核对 Worker ${target.workerName}：${status.output.trim().slice(-400)}`,
+  );
 }
 
 async function inspectD1ForUninstall(instance) {
@@ -782,19 +2421,280 @@ async function inspectD1ForUninstall(instance) {
   return existing;
 }
 
-async function preflightUninstall(instance) {
-  console.log("\n正在核对当前 Cloudflare 账号和卸载目标，不会在这一步删除数据…");
-  const [database, r2] = await Promise.all([
-    inspectD1ForUninstall(instance),
-    cloudflareApi(
-      `/accounts/${instance.accountId}/r2/buckets/${encodeURIComponent(instance.r2Name)}/objects`,
-      { query: { per_page: 1 } },
-    ),
-  ]);
-  console.log(
-    `✓ 卸载目标已核对：Worker ${instance.workerName}、R2 ${instance.r2Name}、D1 ${instance.d1Name}。`,
+async function writeNodeUninstallConfigs(inventory, workspace) {
+  const placeholderPath = path.join(workspace, "uninstall-placeholder.mjs");
+  await writeFile(
+    placeholderPath,
+    "export default { fetch() { return new Response(null, { status: 404 }); } };",
+    { mode: 0o600 },
   );
-  return { database, r2Missing: r2.missing };
+  return Promise.all(
+    inventory.nodes.map(async (node) => {
+      const configPath = path.join(workspace, `${node.id}.wrangler.jsonc`);
+      await writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            name: node.workerName,
+            main: "./uninstall-placeholder.mjs",
+            account_id: node.accountId,
+            compatibility_date: "2025-01-01",
+            workers_dev: false,
+            preview_urls: false,
+          },
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+      return { ...node, configPath };
+    }),
+  );
+}
+
+async function preflightUninstall(instance, nodeTargets) {
+  console.log("\n正在核对当前 Cloudflare 账号和卸载目标，不会在这一步删除数据…");
+  const localOwnership = await readPrimaryOwnershipIntent(
+    PRIMARY_OWNERSHIP_PATH,
+    { allowMissing: true },
+  );
+  if (!localOwnership) {
+    throw new Error(
+      "当前实例没有 v0.3 随机主资源归属凭证。旧版同名 Worker/R2 不能在卸载时临时认领；已整体停止，D1 和本机配置均保留。请先通过更新助手完成安全迁移。",
+    );
+  }
+  const ownership = assertPrimaryOwnershipMatchesInstance(
+    localOwnership,
+    instance,
+  );
+  const database = await inspectD1ForUninstall(instance);
+  const primaryTarget = {
+    accountId: instance.accountId,
+    bucketName: instance.r2Name,
+    workerName: instance.workerName,
+  };
+  const r2Missing = await inspectBucketForUninstall(
+    primaryTarget,
+    "default",
+    CONFIG_PATH,
+  );
+  const workerMissing = await inspectWorkerForUninstall(
+    primaryTarget,
+    "default",
+    CONFIG_PATH,
+  );
+  if (!r2Missing) {
+    await verifyPrimaryBucketForUninstall(ownership);
+  }
+  if (!workerMissing) {
+    await verifyPrimaryWorkerForUninstall(ownership, instance);
+  }
+
+  const checkedNodes = [];
+  for (const node of nodeTargets) {
+    if (node.uninstallCompletedAt) {
+      checkedNodes.push({
+        ...node,
+        bucketMissing: true,
+        workerMissing: true,
+      });
+      console.log(
+        `✓ 附加节点 ${node.label} 此前已完成清理；本轮只核对卸载清单。`,
+      );
+      continue;
+    }
+    const bucketMissing = await inspectBucketForUninstall(
+      node,
+      node.profile,
+      node.configPath,
+    );
+    const workerMissing = await inspectWorkerForUninstall(
+      node,
+      node.profile,
+      node.configPath,
+    );
+    if (!bucketMissing && node.managedBucket) {
+      await readManagedBucketOwnershipMarker(node);
+    }
+    if (!workerMissing && node.managedWorker) {
+      await verifyStorageNodeWorkerForUninstall(node);
+    }
+    checkedNodes.push({ ...node, bucketMissing, workerMissing });
+    console.log(
+      `✓ 已核对附加节点 ${node.label}：profile ${node.profile}、账号 ${node.accountId}、资源归属边界。`,
+    );
+  }
+
+  if (database) {
+    const registeredNodes = await readD1StorageNodesForUninstall(instance);
+    reconcileStorageNodeInventory(
+      { version: 1, nodes: nodeTargets },
+      registeredNodes,
+    );
+    console.log(
+      `✓ 本机节点清单与主 D1 登记已通过安全核对（${registeredNodes.length} 个已登记节点）。`,
+    );
+  }
+
+  const nodesNeedingD1 = checkedNodes.filter(
+    (node) =>
+      !node.uninstallCompletedAt &&
+      node.status !== "provisioning",
+  );
+  if (!database && nodesNeedingD1.length) {
+    throw new Error(
+      "主 D1 已不存在，无法安全取得附加节点的 owner UUID 清理边界；节点清单已保留。",
+    );
+  }
+  const primaryCleanup = database
+    ? await storageCleanupPlan(
+        instance,
+        null,
+        ownership.managedBucket,
+      )
+    : { uploads: [], prefixes: [] };
+  if (!r2Missing) {
+    assertPurgePlanFits(
+      {
+        uploads: primaryCleanup.uploads,
+        prefixes: ownership.managedBucket
+          ? []
+          : primaryCleanup.prefixes,
+        purgeAll: ownership.managedBucket,
+      },
+      instance.r2Name,
+    );
+  }
+  for (const node of checkedNodes) {
+    node.cleanup =
+      database && !node.uninstallCompletedAt && !node.bucketMissing
+        ? await storageCleanupPlan(instance, node.id, node.managedBucket)
+        : { uploads: [], prefixes: [] };
+    if (!node.uninstallCompletedAt && !node.bucketMissing) {
+      assertPurgePlanFits(
+        {
+          uploads: node.cleanup.uploads,
+          prefixes: node.managedBucket ? [] : node.cleanup.prefixes,
+          purgeAll: node.managedBucket,
+        },
+        node.bucketName,
+      );
+    }
+  }
+  console.log(
+    `✓ 卸载目标已核对：主 Worker ${instance.workerName}、主 R2 ${instance.r2Name}、D1 ${instance.d1Name}、${checkedNodes.length} 个附加节点。`,
+  );
+  return {
+    database,
+    r2Missing,
+    workerMissing,
+    ownership,
+    primaryCleanup,
+    nodes: checkedNodes,
+  };
+}
+
+async function deleteStorageNodeWorker(node) {
+  if (!node.managedWorker) {
+    console.log(`  保留非受管 Worker ${node.workerName}。`);
+    return;
+  }
+  if (node.workerMissing) {
+    console.log(`  ✓ 节点 Worker ${node.workerName} 已经不存在。`);
+    return;
+  }
+  const removed = await runWrangler(
+    ["delete", node.workerName, "--force", "--config", node.configPath],
+    node,
+    { profile: node.profile },
+  );
+  if (removed.code !== 0 && !isMissingCloudflareResource(removed.output)) {
+    throw new Error(
+      `节点 Worker ${node.workerName} 未能删除：${removed.output.trim().slice(-500)}`,
+    );
+  }
+  console.log(`  ✓ 受管节点 Worker ${node.workerName} 已删除。`);
+}
+
+async function deleteManagedStorageNodeBucket(node) {
+  // The purge helper deliberately protects this marker so a killed launcher
+  // can still prove bucket ownership on its next preflight. Remove it only in
+  // the narrow final-delete window, after one last exact comparison.
+  await readManagedBucketOwnershipMarker(node);
+  const markerRemoved = await runWrangler(
+    [
+      "r2",
+      "object",
+      "delete",
+      `${node.bucketName}/${encodeR2ObjectKey(node.bucketOwnershipMarkerKey)}`,
+      "--remote",
+      "--force",
+      "--config",
+      node.configPath,
+    ],
+    node,
+    { profile: node.profile },
+  );
+  if (markerRemoved.code !== 0) {
+    throw new Error(
+      `节点 R2 存储桶 ${node.bucketName} 的归属标记未能进入最终删除阶段：${markerRemoved.output.trim().slice(-400)}`,
+    );
+  }
+  const removed = await runWrangler(
+    ["r2", "bucket", "delete", node.bucketName],
+    node,
+    { profile: node.profile },
+  );
+  if (removed.code !== 0 && !isMissingCloudflareResource(removed.output)) {
+    throw new Error(
+      `节点 R2 存储桶 ${node.bucketName} 未能删除：${removed.output.trim().slice(-500)}`,
+    );
+  }
+  console.log(`  ✓ 受管 R2 存储桶 ${node.bucketName} 已删除。`);
+}
+
+async function deleteStorageNodes(inventory, nodes) {
+  if (!nodes.length) return;
+  console.log(`\n正在清理 ${nodes.length} 个附加存储节点…`);
+  for (const node of nodes) {
+    if (node.uninstallCompletedAt) {
+      console.log(`- ${node.label}：此前已完成，跳过远端修改。`);
+      continue;
+    }
+    console.log(
+      `- ${node.label}（${node.accountId} / profile ${node.profile}）`,
+    );
+    await deleteStorageNodeWorker(node);
+    if (node.bucketMissing) {
+      console.log(`  ✓ R2 存储桶 ${node.bucketName} 已经不存在。`);
+    } else {
+      try {
+        await purgeAllR2Data(node, node.cleanup, node.managedBucket);
+        if (node.managedBucket) {
+          await deleteManagedStorageNodeBucket(node);
+        } else {
+          console.log(
+            `  ✓ 共用桶 ${node.bucketName} 只清除了本实例 owner UUID 前缀；存储桶和其他配置已保留。`,
+          );
+        }
+      } catch (error) {
+        if (node.managedBucket) {
+          try {
+            await restoreManagedBucketOwnershipMarker(node);
+          } catch (restoreError) {
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)}；${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+            );
+          }
+        }
+        throw error;
+      }
+    }
+    await markStorageNodeUninstalled(inventory, node.id);
+  }
+  if (inventory.nodes.some((node) => !node.uninstallCompletedAt)) {
+    throw new Error("仍有附加存储节点未完成；D1 和节点清单均已保留。");
+  }
 }
 
 async function deleteD1(instance, existing) {
@@ -858,20 +2758,121 @@ async function clearLocalInstance() {
   await writeDefaultConfig();
 }
 
-async function uninstallInstance(instance, prompt) {
-  if (!instance.configured) {
-    console.log("\n当前没有可安全识别的一整套实例配置，无法一键卸载。可以选择 2 重新配置。");
+async function uninstallProvisioningPrimary(ownership, prompt) {
+  let cleanupPlan;
+  try {
+    cleanupPlan = primaryProvisioningCleanupPlan(ownership);
+  } catch {
+    console.log(
+      "\n本机配置不完整，但归属凭证显示 Worker/D1 配置曾经开始。为避免漏删或误删，已整体停止；请先从备份恢复 wrangler.jsonc 或重新打开更新助手。",
+    );
     return;
   }
+  console.log("\n检测到尚未完成配置的主 R2 资源：");
+  console.log(`- Cloudflare 账号：${ownership.accountId}`);
+  console.log(
+    cleanupPlan.deleteBucket
+      ? `- 受管 R2 存储桶：${ownership.r2Name}（删除桶及其中全部内容）`
+      : `- 复用 R2 存储桶：${ownership.r2Name}（只删除本次配置写入的随机归属标记，保留桶和其他数据）`,
+  );
+  console.log("- 本机未登记主 Worker 或 D1，不会按名称猜测这些资源。");
+  const confirmation = (
+    await prompt.question('\n确定处理这项中断配置。请输入 DELETE 后回车：')
+  ).trim();
+  if (confirmation !== "DELETE") {
+    console.log("\n已取消，没有删除任何信息。");
+    return;
+  }
+
+  await ensureDependencies();
+  await stopOwnedService(3000, "drive");
+  await stopOwnedService(8788, "setup");
+  const target = {
+    accountId: ownership.accountId,
+    bucketName: ownership.r2Name,
+  };
+  const r2Missing = await inspectBucketForUninstall(
+    target,
+    "default",
+    CONFIG_PATH,
+  );
+  if (!r2Missing) {
+    await verifyPrimaryBucketForUninstall(ownership);
+  }
+  await deleteR2(
+    {
+      accountId: ownership.accountId,
+      r2Name: ownership.r2Name,
+    },
+    ownership,
+    r2Missing,
+    { uploads: [], prefixes: [] },
+  );
+  await finalizeReusedPrimaryBucket(ownership, r2Missing);
+  await clearLocalInstance();
+  console.log("\n✓ 中断的主 R2 配置已按随机归属凭证安全清理。");
+}
+
+async function uninstallInstance(instance, prompt) {
+  if (!instance.configured) {
+    const ownership = await readPrimaryOwnershipIntent(
+      PRIMARY_OWNERSHIP_PATH,
+      { allowMissing: true },
+    );
+    if (ownership) {
+      await uninstallProvisioningPrimary(ownership, prompt);
+      return;
+    }
+    console.log(
+      "\n当前没有可安全识别的实例配置或随机归属凭证，无法按资源名称一键卸载。可以选择 2 重新配置。",
+    );
+    return;
+  }
+  const localOwnership = await readPrimaryOwnershipIntent(
+    PRIMARY_OWNERSHIP_PATH,
+    { allowMissing: true },
+  );
+  if (!localOwnership) {
+    console.log(
+      "\n当前实例缺少 v0.3 随机主资源归属凭证。旧版同名 Worker/R2 不会在卸载时临时认领；没有删除 Worker、R2、D1 或本机配置。请先用更新助手完成安全迁移。",
+    );
+    return;
+  }
+  const primaryOwnership = assertPrimaryOwnershipMatchesInstance(
+    localOwnership,
+    instance,
+  );
+  const inventory = await readStoragePoolInventory();
   console.log("\n一键卸载将永久删除以下当前 R2 Drive 实例：");
   console.log(`- Cloudflare Worker：${instance.workerName}（含版本、Secret 和路由）`);
   if (instance.customHostname) console.log(`- Worker 域名绑定：${instance.customHostname}`);
   console.log(
-    `- R2 存储桶：${instance.r2Name}（全部文件、CORS、生命周期和桶级配置）`,
+    primaryOwnership.managedBucket
+      ? `- 受管 R2 存储桶：${instance.r2Name}（全部文件、CORS、生命周期和桶级配置）`
+      : `- 复用 R2 存储桶：${instance.r2Name}（只清理本实例 owner UUID 前缀与归属标记，保留桶和其他配置）`,
   );
   console.log(`- D1 资料数据库：${instance.d1Name}（主人账号、目录、分享和审计信息）`);
+  if (inventory.nodes.length) {
+    console.log(`- 附加存储节点：${inventory.nodes.length} 个`);
+    for (const node of inventory.nodes) {
+      const bucketAction = node.managedBucket
+        ? `删除受管桶 ${node.bucketName}`
+        : `仅清理共用桶 ${node.bucketName} 的本实例 UUID 前缀`;
+      const workerAction = node.managedWorker
+        ? `删除受管 Worker ${node.workerName}`
+        : `保留非受管 Worker ${node.workerName}`;
+      const progress = node.uninstallCompletedAt ? "（此前已清理）" : "";
+      const provisioning =
+        node.status === "active" ? "" : `（${node.status}，连接未完成）`;
+      console.log(
+        `  · ${node.label}${progress}${provisioning}：账号 ${node.accountId} / profile ${node.profile}；${bucketAction}；${workerAction}`,
+      );
+    }
+  }
   console.log("- 本机 Secret、缓存和实例配置");
-  console.log("\n不会删除 Wrangler 登录，也不会碰 Cloudflare 账号中的其他项目。");
+  console.log(
+    "\n不会退出或删除任何 Wrangler profile；非受管共用桶中的其他数据和配置会保留。",
+  );
   const confirmation = (await prompt.question('\n确定不可恢复。请输入 DELETE 后回车：')).trim();
   if (confirmation !== "DELETE") {
     console.log("\n已取消卸载，没有删除任何信息。");
@@ -882,11 +2883,27 @@ async function uninstallInstance(instance, prompt) {
   console.log("\n正在停止本机 R2 Drive…");
   await stopOwnedService(3000, "drive");
   await stopOwnedService(8788, "setup");
-  const targets = await preflightUninstall(instance);
-  await deleteWorker(instance);
-  await deleteR2(instance, targets.r2Missing);
-  await deleteD1(instance, targets.database);
-  await clearLocalInstance();
+  const workspace = await mkdtemp(path.join(tmpdir(), "r2-drive-uninstall-"));
+  try {
+    const nodeTargets = await writeNodeUninstallConfigs(inventory, workspace);
+    const targets = await preflightUninstall(instance, nodeTargets);
+    await deleteWorker(instance);
+    await deleteStorageNodes(inventory, targets.nodes);
+    await deleteR2(
+      instance,
+      targets.ownership,
+      targets.r2Missing,
+      targets.primaryCleanup,
+    );
+    await deleteD1(instance, targets.database);
+    await finalizeReusedPrimaryBucket(
+      targets.ownership,
+      targets.r2Missing,
+    );
+    await clearLocalInstance();
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
   console.log("\n✓ R2 Drive 已一键卸载完成。源代码仍保留，可选择 2 重新配置。");
 }
 

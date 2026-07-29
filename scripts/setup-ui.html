@@ -1288,6 +1288,10 @@
             <span class="nav-icon">速</span>
             <span>上传加速</span>
           </button>
+          <button class="nav-item" type="button" data-step="6">
+            <span class="nav-icon">池</span>
+            <span>扩展存储</span>
+          </button>
         </nav>
       </aside>
 
@@ -2050,6 +2054,166 @@
               </div>
             </footer>
           </section>
+
+          <section class="step-page" data-page="6">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>连接更多 Cloudflare R2 账号</h2>
+                <p>
+                  每个账号会由 Wrangler 自动部署一个私人 Storage Node Worker，
+                  文件仍然统一显示在当前网盘中。
+                </p>
+              </header>
+
+              <div class="guide">
+                <h3>这是容量调度，不是 Cloudflare 真实剩余空间</h3>
+                <p>
+                  下方容量是你自己设置的软容量／预算上限，R2 不提供固定硬盘容量。
+                  请只连接你拥有或获授权管理的账号，不要用此功能规避平台限额、计费或服务条款。
+                </p>
+              </div>
+
+              <div class="update-summary">
+                <div class="update-version-card">
+                  <span>账号之间如何连接</span>
+                  <strong>Storage Node</strong>
+                  <small>节点只保存控制端公钥，不要求复制 R2 S3 长期密钥。</small>
+                </div>
+                <div class="update-version-card">
+                  <span>自动配置范围</span>
+                  <strong>Wrangler-only</strong>
+                  <small>账号已启用 R2 后，桶、Local Uploads 和 Worker 都会自动完成。</small>
+                </div>
+              </div>
+
+              <div class="guide">
+                <h3>连接前请确认这个账号已经启用 R2</h3>
+                <p>
+                  Cloudflare 要求的付款设置属于账号账单操作，Wrangler 无法代办。
+                  完成这一前置步骤后，连接过程只会在官方授权页需要 OAuth／MFA，
+                  无需再打开 Cloudflare 控制台配置桶或 Worker。
+                </p>
+              </div>
+
+              <form id="storage-pool-form">
+                <div class="form-stack">
+                  <div class="field">
+                    <label for="storage-pool-account">
+                      <span>选择要加入的 Cloudflare 账号</span>
+                      <select id="storage-pool-account" name="accountId" required></select>
+                    </label>
+                    <div class="guide-actions">
+                      <button
+                        class="button secondary"
+                        id="storage-pool-new-login"
+                        type="button"
+                      >
+                        连接另一个 Cloudflare 登录
+                      </button>
+                      <span class="status" id="storage-pool-profile-status" role="status">
+                        正在等待账号
+                      </span>
+                    </div>
+                  </div>
+
+                  <label for="storage-pool-label">
+                    <span>节点名称</span>
+                    <input
+                      id="storage-pool-label"
+                      name="label"
+                      maxlength="60"
+                      placeholder="例如：备用 R2"
+                      autocomplete="off"
+                      required
+                    />
+                  </label>
+
+                  <label for="storage-pool-bucket">
+                    <span>这个账号中的 R2 存储桶</span>
+                    <input
+                      id="storage-pool-bucket"
+                      name="bucketName"
+                      minlength="3"
+                      maxlength="63"
+                      pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+                      autocomplete="off"
+                      required
+                    />
+                    <small>
+                      同名桶存在时会复用并开启 Local Uploads；不存在时自动在 APAC
+                      创建私人桶。复用桶的这项设置在暂停节点或一键卸载后仍会保留。
+                    </small>
+                  </label>
+
+                  <label for="storage-pool-soft-limit">
+                    <span>软容量／预算上限（GiB）</span>
+                    <input
+                      id="storage-pool-soft-limit"
+                      name="softLimitGiB"
+                      type="number"
+                      min="1"
+                      max="8388607"
+                      value="10"
+                      required
+                    />
+                    <small>仅用于网盘分配新文件，不代表账单或 Cloudflare 实测剩余容量。</small>
+                  </label>
+                </div>
+              </form>
+
+              <div class="update-checklist">
+                <span>账号和资源命令同时锁定 Wrangler profile 与 Account ID</span>
+                <span>自动检查或创建 R2，并开启 Local Uploads</span>
+                <span>为没有 workers.dev 子域的账号自动创建随机安全子域</span>
+                <span>部署后由主网盘完成签名健康检查，再正式加入容量池</span>
+              </div>
+
+              <div class="launch-progress" id="storage-pool-progress" aria-live="polite">
+                <div class="launch-progress-head">
+                  <span id="storage-pool-progress-message">正在验证网盘连接凭证</span>
+                  <span id="storage-pool-progress-percent">0%</span>
+                </div>
+                <div
+                  class="launch-progress-track"
+                  role="progressbar"
+                  aria-label="连接存储节点进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                  id="storage-pool-progress-track"
+                >
+                  <i class="launch-progress-bar" id="storage-pool-progress-bar"></i>
+                </div>
+                <div class="launch-stages" aria-hidden="true">
+                  <span class="launch-stage" data-storage-pool-stage="checking">验证账号</span>
+                  <span class="launch-stage" data-storage-pool-stage="bucket">准备 R2</span>
+                  <span class="launch-stage" data-storage-pool-stage="deploying">部署节点</span>
+                  <span class="launch-stage" data-storage-pool-stage="enrolling">主网盘复核</span>
+                </div>
+              </div>
+
+              <div class="guide hidden" id="storage-pool-success">
+                <h3>存储节点已经连接</h3>
+                <p id="storage-pool-success-copy"></p>
+              </div>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large" id="storage-pool-connect" type="button">
+                一键连接并加入网盘
+              </button>
+              <span class="status" id="storage-pool-status" role="status">正在准备</span>
+              <div class="progress" aria-label="扩展存储">
+                <span>扩展存储</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot active"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
         </main>
       </section>
     </div>
@@ -2077,6 +2241,49 @@
       const requestedStep = requestedParameters.get("step");
       const requestedAutostart = requestedParameters.get("autostart") === "1";
 
+      function decodeBase64UrlJson(value) {
+        const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+        const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+        const binary = atob(padded);
+        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        return JSON.parse(new TextDecoder().decode(bytes));
+      }
+
+      function readStorageEnrollment() {
+        const prefix = "#storage-enrollment=";
+        if (!window.location.hash.startsWith(prefix)) {
+          return {
+            value: null,
+            encoded: "",
+            error: "缺少网盘发出的连接凭证，请关闭此页并从网盘设置重新打开。",
+          };
+        }
+        const encoded = window.location.hash.slice(prefix.length);
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+        try {
+          const value = decodeBase64UrlJson(encoded);
+          if (
+            !value ||
+            typeof value.origin !== "string" ||
+            typeof value.token !== "string"
+          ) {
+            throw new Error("invalid");
+          }
+          return { value: { origin: value.origin, token: value.token }, encoded, error: "" };
+        } catch {
+          return {
+            value: null,
+            encoded: "",
+            error: "网盘发出的连接凭证已损坏，请返回网盘设置重新生成。",
+          };
+        }
+      }
+
+      const initialStorageEnrollment =
+        requestedStep === "storage-pool"
+          ? readStorageEnrollment()
+          : { value: null, encoded: "", error: "" };
+
       const state = {
         activeStep: 0,
         cloudflareChoice: null,
@@ -2091,6 +2298,12 @@
         updateInfo: null,
         accelerationInfo: null,
         accelerationRunning: false,
+        storageEnrollment: initialStorageEnrollment.value,
+        storageEnrollmentEncoded: initialStorageEnrollment.encoded,
+        storageEnrollmentError: initialStorageEnrollment.error,
+        storageProfile: "default",
+        storagePrepared: false,
+        storageConnected: false,
         helperOutdated: false,
       };
 
@@ -2101,6 +2314,7 @@
         "https://developers.cloudflare.com/workers/configuration/routing/custom-domains/",
         "https://github.com/oleyyu/R2-Drive-New/releases",
         "https://developers.cloudflare.com/r2/buckets/local-uploads/",
+        "https://developers.cloudflare.com/workers/wrangler/commands/general/",
       ];
 
       function setBusy(busy) {
@@ -2130,6 +2344,7 @@
 
       const updateStageOrder = ["download", "prepare", "migrate", "deploy"];
       const accelerationStageOrder = ["checking", "local-uploads", "cors", "verifying", "done"];
+      const storagePoolStageOrder = ["checking", "bucket", "deploying", "enrolling", "done"];
 
       function updateStageIndex(stage) {
         if (["checking", "downloading", "verifying", "available", "current"].includes(stage)) {
@@ -2144,6 +2359,40 @@
       function accelerationStageIndex(stage) {
         const index = accelerationStageOrder.indexOf(stage);
         return index < 0 ? 0 : index;
+      }
+
+      function storagePoolStageIndex(stage) {
+        if (["checking", "key", "accounts", "login"].includes(stage)) return 0;
+        if (["bucket", "local-uploads"].includes(stage)) return 1;
+        if (["subdomain", "deploying"].includes(stage)) return 2;
+        if (stage === "enrolling") return 3;
+        if (stage === "done") return 4;
+        return 0;
+      }
+
+      function renderStoragePoolProgress(progress, errorMessage = "") {
+        const value = progress || {
+          percent: errorMessage ? 0 : 3,
+          stage: errorMessage ? "error" : "checking",
+          message: errorMessage || "正在准备 Wrangler",
+        };
+        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
+        const isError = value.stage === "error" || Boolean(errorMessage);
+        const message = errorMessage || value.message || "正在连接存储节点";
+        byId("storage-pool-progress").classList.toggle("error", isError);
+        byId("storage-pool-progress-message").textContent = message;
+        byId("storage-pool-progress-percent").textContent = `${Math.round(percent)}%`;
+        byId("storage-pool-progress-bar").style.width = `${percent}%`;
+        byId("storage-pool-progress-track").setAttribute(
+          "aria-valuenow",
+          String(Math.round(percent)),
+        );
+        const activeIndex = storagePoolStageIndex(value.stage);
+        for (const stage of document.querySelectorAll("[data-storage-pool-stage]")) {
+          const index = storagePoolStageOrder.indexOf(stage.dataset.storagePoolStage);
+          stage.classList.toggle("done", !isError && index < activeIndex);
+          stage.classList.toggle("active", index === activeIndex);
+        }
       }
 
       function renderAccelerationProgress(progress, errorMessage = "") {
@@ -2329,7 +2578,7 @@
             setStatus(byId("ready-status"), "bad", "请先完成账号连接并确认 R2 已绑卡");
             index = 0;
           }
-          if (index >= 2 && index !== 4 && !state.resourcesReady) {
+          if (index >= 2 && index !== 4 && index !== 6 && !state.resourcesReady) {
             setStatus(byId("storage-status"), "bad", "请先连接 R2 存储");
             index = 1;
           }
@@ -2350,10 +2599,14 @@
                 : "检查更新　›"
               : index === 5
                 ? "开启上传加速　›"
+                : index === 6
+                  ? "连接存储节点　›"
               : "继续设置　›";
         byId("top-next").classList.toggle(
           "hidden",
-          (index === 3 && Boolean(state.configuredHostname)) || index === 5,
+          (index === 3 && Boolean(state.configuredHostname)) ||
+            index === 5 ||
+            index === 6,
         );
         document.querySelector(".content").scrollTop = 0;
         if (
@@ -2479,6 +2732,171 @@
             "点击“打开官方授权”，在 Cloudflare 页面同意后会自动回来。";
           byId("login-account").classList.remove("hidden");
           byId("check-account").classList.add("hidden");
+        }
+      }
+
+      function storageEnrollmentBody() {
+        if (!state.storageEnrollment) {
+          throw new Error(
+            state.storageEnrollmentError ||
+              "缺少网盘发出的连接凭证，请从网盘设置重新打开。",
+          );
+        }
+        return {
+          origin: state.storageEnrollment.origin,
+          token: state.storageEnrollment.token,
+        };
+      }
+
+      function useStorageAccounts(result, applyDefaults = false) {
+        const accounts = Array.isArray(result.accounts) ? result.accounts : [];
+        if (!accounts.length) throw new Error("这个 Wrangler 登录中没有可用账号。");
+        const selector = byId("storage-pool-account");
+        selector.replaceChildren();
+        for (const account of accounts) {
+          const option = document.createElement("option");
+          option.value = account.id;
+          option.textContent = account.name || "Cloudflare 账号";
+          selector.append(option);
+        }
+        state.storageProfile = result.profile || "default";
+        if (applyDefaults) {
+          byId("storage-pool-bucket").value = result.defaultBucket || "";
+          byId("storage-pool-label").value = result.defaultLabel || "R2 节点";
+        }
+        setStatus(
+          byId("storage-pool-profile-status"),
+          "ok",
+          state.storageProfile === "default"
+            ? "使用当前 Wrangler 登录"
+            : "另一个 Wrangler 登录已连接",
+        );
+      }
+
+      async function prepareStoragePool() {
+        showStep(6, true);
+        if (state.storageConnected) return;
+        if (state.storageEnrollmentError || !state.storageEnrollment) {
+          const message =
+            state.storageEnrollmentError ||
+            "缺少网盘发出的连接凭证，请从网盘设置重新打开。";
+          renderStoragePoolProgress(null, message);
+          setStatus(byId("storage-pool-status"), "bad", message);
+          return;
+        }
+        if (state.storagePrepared) return;
+        try {
+          await startJob(
+            "/api/storage-pool/prepare",
+            { enrollment: storageEnrollmentBody() },
+            {
+              statusElement: byId("storage-pool-status"),
+              runningText: "正在验证网盘和 Wrangler",
+              doneText: "可以连接新节点",
+              onProgress: (progress) => renderStoragePoolProgress(progress),
+              onDone: (result) => {
+                useStorageAccounts(result, true);
+                state.storagePrepared = true;
+                renderStoragePoolProgress({
+                  percent: 100,
+                  stage: "done",
+                  message: "账号和主网盘密钥已经准备好",
+                });
+              },
+              onError: (error) => renderStoragePoolProgress(null, error.message),
+            },
+          );
+        } catch {
+          // Status and progress already contain the safe user-facing error.
+        }
+      }
+
+      async function createStorageProfile() {
+        try {
+          await startJob(
+            "/api/storage-pool/profile/create",
+            { enrollment: storageEnrollmentBody() },
+            {
+              statusElement: byId("storage-pool-profile-status"),
+              runningText: "等待 Cloudflare 官方授权",
+              doneText: "新登录已经连接",
+              onProgress: (progress) => renderStoragePoolProgress(progress),
+              onDone: (result) => {
+                useStorageAccounts(result, false);
+                renderStoragePoolProgress({
+                  percent: 100,
+                  stage: "done",
+                  message: "请选择新登录中的账号，然后一键连接",
+                });
+              },
+              onError: (error) => renderStoragePoolProgress(null, error.message),
+            },
+          );
+        } catch {
+          // The helper preserves the original/default login when OAuth is cancelled.
+        }
+      }
+
+      function showStorageNodeConnected(result) {
+        const node = result.node || {};
+        state.storageConnected = true;
+        byId("storage-pool-success-copy").textContent =
+          `${node.label || "新节点"} 已连接到 ${node.endpoint || "主网盘"}；` +
+          "以后上传的新文件会按照软容量策略自动分配。";
+        byId("storage-pool-success").classList.remove("hidden");
+        byId("storage-pool-connect").classList.add("hidden");
+        renderStoragePoolProgress({
+          percent: 100,
+          stage: "done",
+          message: "存储节点已经加入网盘",
+        });
+        setStatus(byId("storage-pool-status"), "ok", "连接完成");
+        if (window.opener && state.storageEnrollment?.origin) {
+          window.opener.postMessage(
+            { type: "r2-drive:storage-node-connected" },
+            state.storageEnrollment.origin,
+          );
+        }
+        if (state.storageEnrollment) state.storageEnrollment.token = "";
+        state.storageEnrollmentEncoded = "";
+      }
+
+      async function connectStorageNode() {
+        if (!state.storagePrepared) {
+          await prepareStoragePool();
+          if (!state.storagePrepared) return;
+        }
+        const form = byId("storage-pool-form");
+        if (!form.reportValidity()) return;
+        const values = formValues(form);
+        const softLimitGiB = Number(values.softLimitGiB);
+        const softLimitBytes = softLimitGiB * 1024 ** 3;
+        if (!Number.isSafeInteger(softLimitBytes)) {
+          setStatus(byId("storage-pool-status"), "bad", "软容量数值过大。");
+          return;
+        }
+        try {
+          await startJob(
+            "/api/storage-pool/connect",
+            {
+              enrollment: storageEnrollmentBody(),
+              profile: state.storageProfile,
+              accountId: values.accountId,
+              bucketName: values.bucketName.trim().toLowerCase(),
+              label: values.label.trim(),
+              softLimitBytes,
+            },
+            {
+              statusElement: byId("storage-pool-status"),
+              runningText: "正在自动配置节点",
+              doneText: "存储节点已经连接",
+              onProgress: (progress) => renderStoragePoolProgress(progress),
+              onDone: showStorageNodeConnected,
+              onError: (error) => renderStoragePoolProgress(null, error.message),
+            },
+          );
+        } catch {
+          // The pending non-secret inventory is kept for a safe retry.
         }
       }
 
@@ -2660,7 +3078,11 @@
       }
 
       for (const button of navButtons) {
-        button.addEventListener("click", () => showStep(Number(button.dataset.step)));
+        button.addEventListener("click", () => {
+          const step = Number(button.dataset.step);
+          if (step === 6) prepareStoragePool();
+          else showStep(step);
+        });
       }
 
       for (const button of document.querySelectorAll("[data-back]")) {
@@ -2680,6 +3102,8 @@
 
       byId("r2-created").addEventListener("click", () => choose("r2", "yes"));
       byId("check-account").addEventListener("click", checkAccount);
+      byId("storage-pool-new-login").addEventListener("click", createStorageProfile);
+      byId("storage-pool-connect").addEventListener("click", connectStorageNode);
 
       byId("login-account").addEventListener("click", async () => {
         try {
@@ -2985,7 +3409,10 @@
 
       byId("help-top").addEventListener("click", openCurrentHelp);
       byId("help-rail").addEventListener("click", openCurrentHelp);
-      byId("check-environment").addEventListener("click", checkAccount);
+      byId("check-environment").addEventListener("click", () => {
+        if (state.activeStep === 6) prepareStoragePool();
+        else checkAccount();
+      });
       byId("log-open").addEventListener("click", () => byId("log-dialog").showModal());
       byId("log-close").addEventListener("click", () => byId("log-dialog").close());
 
@@ -3024,14 +3451,35 @@
                 message,
               });
               setStatus(byId("update-status"), "busy", message);
+            } else if (requestedStep === "storage-pool") {
+              showStep(6, true);
+              renderStoragePoolProgress({
+                percent: 3,
+                stage: "checking",
+                message,
+              });
+              setStatus(byId("storage-pool-status"), "busy", message);
             }
             try {
               await waitForHelperVersion(status.version);
-              window.location.reload();
+              if (
+                requestedStep === "storage-pool" &&
+                state.storageEnrollmentEncoded
+              ) {
+                window.location.replace(
+                  `${window.location.pathname}${window.location.search}` +
+                    `#storage-enrollment=${state.storageEnrollmentEncoded}`,
+                );
+              } else {
+                window.location.reload();
+              }
             } catch (error) {
               if (requestedStep === "upload-acceleration") {
                 renderAccelerationProgress(null, error.message);
                 setStatus(byId("acceleration-status"), "bad", error.message);
+              } else if (requestedStep === "storage-pool") {
+                renderStoragePoolProgress(null, error.message);
+                setStatus(byId("storage-pool-status"), "bad", error.message);
               } else {
                 renderUpdateProgress(null, error.message);
                 setStatus(byId("update-status"), "bad", error.message);
@@ -3040,10 +3488,20 @@
             return;
           }
           if (status.currentJob && status.currentJob.status === "running") {
+            const storagePoolJob = status.currentJob.kind?.startsWith("storage-pool");
             await watchJob(status.currentJob, {
-              statusElement: byId("storage-status"),
+              statusElement: storagePoolJob
+                ? byId("storage-pool-status")
+                : byId("storage-status"),
               runningText: "正在恢复任务",
               doneText: "任务已完成",
+              onProgress: storagePoolJob
+                ? (progress) => renderStoragePoolProgress(progress)
+                : undefined,
+              onDone:
+                status.currentJob.kind === "storage-pool-connect"
+                  ? showStorageNodeConnected
+                  : undefined,
             });
             hydrate(await api("/api/status", { method: "GET" }));
           }
@@ -3062,10 +3520,19 @@
             } else if (requestedAutostart) {
               await enableAcceleration();
             }
+          } else if (requestedStep === "storage-pool") {
+            showStep(6, true);
+            await prepareStoragePool();
           }
         })
         .catch((error) => {
-          setStatus(byId("ready-status"), "bad", error.message);
+          if (requestedStep === "storage-pool") {
+            showStep(6, true);
+            renderStoragePoolProgress(null, error.message);
+            setStatus(byId("storage-pool-status"), "bad", error.message);
+          } else {
+            setStatus(byId("ready-status"), "bad", error.message);
+          }
         });
     </script>
   </body>

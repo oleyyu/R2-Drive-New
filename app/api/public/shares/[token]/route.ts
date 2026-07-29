@@ -13,6 +13,7 @@ type ShareRow = {
   size: number;
   content_type: string | null;
   storage_key: string;
+  storage_node_id: string | null;
   expires_at: string | null;
   max_downloads: number | null;
   download_count: number;
@@ -23,7 +24,7 @@ async function getShare(token: string): Promise<ShareRow> {
   const share = await db
     .prepare(
       `SELECT s.id, s.file_id, s.expires_at, s.max_downloads, s.download_count,
-              f.name, f.size, f.content_type, f.storage_key
+              f.name, f.size, f.content_type, f.storage_key, f.storage_node_id
        FROM shares s JOIN files f ON f.id = s.file_id
        WHERE s.token_hash = ? AND f.status = 'ready'`,
     )

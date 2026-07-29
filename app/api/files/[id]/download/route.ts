@@ -4,8 +4,21 @@ import { ensureDatabase, getFileBucket } from "@/db/runtime";
 import { requireUser } from "@/lib/auth";
 import { appConfig, directR2Configured } from "@/lib/config";
 import { apiError, contentDisposition, HttpError } from "@/lib/http";
+import {
+  getNodeObject,
+  getStorageNode,
+  nodeObjectResponseHeaders,
+} from "@/lib/storage";
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+function isInvalidRange(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return (
+    Reflect.get(error, "code") === 10039 ||
+    Reflect.get(error, "name") === "InvalidRange"
+  );
+}
 
 export async function GET(request: Request, context: RouteContext): Promise<Response> {
   try {
@@ -14,12 +27,53 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     const db = await ensureDatabase();
     const file = await db
       .prepare(
-        `SELECT storage_key, name, content_type, size
+        `SELECT storage_key, storage_node_id, name, content_type, size
          FROM files WHERE id = ? AND owner_id = ? AND kind = 'file' AND status = 'ready'`,
       )
       .bind(id, user.id)
-      .first<{ storage_key: string; name: string; content_type: string | null; size: number }>();
+      .first<{
+        storage_key: string;
+        storage_node_id: string | null;
+        name: string;
+        content_type: string | null;
+        size: number;
+      }>();
     if (!file) throw new HttpError(404, "文件不存在。", "not_found");
+    if (file.storage_node_id) {
+      const node = await getStorageNode(db, file.storage_node_id);
+      if (!node) {
+        throw new HttpError(503, "文件所属的存储节点不存在。", "storage_node_missing");
+      }
+      const object = await getNodeObject(
+        node,
+        file.storage_key,
+        request.headers.get("range"),
+      );
+      if (object.status === 404) {
+        await object.body?.cancel();
+        throw new HttpError(404, "存储对象不存在。", "object_not_found");
+      }
+      if (object.status === 416) {
+        await object.body?.cancel();
+        throw new HttpError(416, "Range 请求无法满足。", "invalid_range");
+      }
+      if (object.status !== 200 && object.status !== 206) {
+        await object.body?.cancel();
+        throw new HttpError(
+          502,
+          `存储节点读取失败（HTTP ${object.status}）。`,
+          "storage_node_error",
+        );
+      }
+      const headers = nodeObjectResponseHeaders(object);
+      if (!headers.has("content-type") && file.content_type) {
+        headers.set("content-type", file.content_type);
+      }
+      headers.set("accept-ranges", "bytes");
+      headers.set("content-disposition", contentDisposition(file.name));
+      headers.set("cache-control", "private, no-store");
+      return new Response(object.body, { status: object.status, headers });
+    }
     const config = appConfig();
     if (
       config.downloadMode === "direct" &&
@@ -66,6 +120,11 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     headers.set("content-length", String(object.size));
     return new Response(object.body, { headers });
   } catch (error) {
+    if (isInvalidRange(error)) {
+      return apiError(
+        new HttpError(416, "Range 请求无法满足。", "invalid_range"),
+      );
+    }
     return apiError(error);
   }
 }

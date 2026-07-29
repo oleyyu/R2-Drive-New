@@ -1,0 +1,1 @@
+ALTER TABLE `storage_node_enrollments` ADD `completed_node_id` text;

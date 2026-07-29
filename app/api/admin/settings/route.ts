@@ -5,7 +5,12 @@ import { z } from "zod";
 
 const schema = z.object({
   registrationMode: z.enum(["open", "invite", "closed"]).optional(),
-  defaultUserQuotaBytes: z.number().int().min(1024 ** 2).max(5_492_064_911_360).optional(),
+  defaultUserQuotaBytes: z
+    .number()
+    .int()
+    .min(1024 ** 2)
+    .max(Number.MAX_SAFE_INTEGER)
+    .optional(),
   siteName: z.string().trim().min(1).max(80).optional(),
 });
 

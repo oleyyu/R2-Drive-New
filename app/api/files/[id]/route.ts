@@ -50,7 +50,9 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
         .prepare("SELECT id FROM files WHERE id = ? AND owner_id = ? AND kind = 'folder' AND status = 'ready'")
         .bind(parentId, user.id)
         .first();
-      if (!parent) throw new HttpError(404, "目标文件夹不存在。", "parent_not_found");
+      if (!parent) {
+        throw new HttpError(409, "目标文件夹不存在。", "parent_not_found");
+      }
       if (current.kind === "folder") {
         const cycle = await db
           .prepare(
@@ -71,23 +73,131 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
         }
       }
     }
+    const normalizedName = name.toLocaleLowerCase();
     try {
-      await db
+      const updated = await db
         .prepare(
           `UPDATE files
            SET name = ?, normalized_name = ?, parent_id = ?, is_pinned = ?, updated_at = ?
-           WHERE id = ? AND owner_id = ?`,
+           WHERE id = ? AND owner_id = ? AND status = 'ready'
+             AND (
+               ? IS NULL
+               OR EXISTS (
+                 SELECT 1
+                 FROM files parent
+                 WHERE parent.id = ? AND parent.owner_id = ?
+                   AND parent.kind = 'folder' AND parent.status = 'ready'
+               )
+             )
+             AND (
+               files.kind != 'folder'
+               OR ? IS NULL
+               OR NOT EXISTS (
+                 WITH RECURSIVE descendants(id) AS (
+                   SELECT id
+                   FROM files
+                   WHERE id = ? AND owner_id = ? AND status = 'ready'
+                   UNION
+                   SELECT child.id
+                   FROM files child
+                   JOIN descendants parent ON child.parent_id = parent.id
+                   WHERE child.owner_id = ? AND child.status = 'ready'
+                 )
+                 SELECT 1 FROM descendants WHERE id = ?
+               )
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM files sibling
+               WHERE sibling.owner_id = ?
+                 AND COALESCE(sibling.parent_id, '') = COALESCE(?, '')
+                 AND sibling.normalized_name = ?
+                 AND sibling.status != 'deleted'
+                 AND sibling.id != ?
+             )`,
         )
         .bind(
           name,
-          name.toLocaleLowerCase(),
+          normalizedName,
           parentId,
           isPinned,
           new Date().toISOString(),
           id,
           user.id,
+          parentId,
+          parentId,
+          user.id,
+          parentId,
+          id,
+          user.id,
+          user.id,
+          parentId,
+          user.id,
+          parentId,
+          normalizedName,
+          id,
         )
         .run();
+      if (Number(updated.meta.changes ?? 0) === 0) {
+        const latest = await db
+          .prepare(
+            "SELECT status FROM files WHERE id = ? AND owner_id = ?",
+          )
+          .bind(id, user.id)
+          .first<{ status: string }>();
+        if (!latest || latest.status !== "ready") {
+          throw new HttpError(
+            409,
+            "项目状态已经变化，请刷新后重试。",
+            "update_conflict",
+          );
+        }
+        if (parentId) {
+          const latestParent = await db
+            .prepare(
+              "SELECT id FROM files WHERE id = ? AND owner_id = ? AND kind = 'folder' AND status = 'ready'",
+            )
+            .bind(parentId, user.id)
+            .first();
+          if (!latestParent) {
+            throw new HttpError(
+              409,
+              "目标文件夹状态已经变化，请刷新后重试。",
+              "parent_not_found",
+            );
+          }
+        }
+        if (current.kind === "folder" && parentId) {
+          const cycle = await db
+            .prepare(
+              `WITH RECURSIVE descendants(id) AS (
+                 SELECT id
+                 FROM files
+                 WHERE id = ? AND owner_id = ? AND status = 'ready'
+                 UNION
+                 SELECT child.id
+                 FROM files child
+                 JOIN descendants parent ON child.parent_id = parent.id
+                 WHERE child.owner_id = ? AND child.status = 'ready'
+               )
+               SELECT id FROM descendants WHERE id = ? LIMIT 1`,
+            )
+            .bind(id, user.id, user.id, parentId)
+            .first();
+          if (cycle) {
+            throw new HttpError(
+              400,
+              "不能把文件夹移入自己的子文件夹。",
+              "invalid_parent",
+            );
+          }
+        }
+        throw new HttpError(
+          409,
+          "目标位置已有同名项目。",
+          "name_exists",
+        );
+      }
     } catch (error) {
       if (error instanceof Error && error.message.includes("UNIQUE")) {
         throw new HttpError(409, "目标位置已有同名项目。", "name_exists");
@@ -121,12 +231,12 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
         id: string;
         kind: "file" | "folder";
         size: number;
-        status: "uploading" | "ready" | "failed" | "deleted";
+        status: "uploading" | "ready" | "failed" | "deleted" | "purging";
       }>();
     if (!file) throw new HttpError(404, "文件不存在。", "not_found");
 
     if (permanent) {
-      if (file.status !== "deleted") {
+      if (file.status !== "deleted" && file.status !== "purging") {
         throw new HttpError(409, "请先把项目移入回收站。", "not_in_trash");
       }
       const result = await permanentlyDeleteTree(db, user.id, id);
@@ -157,35 +267,90 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
       throw new HttpError(409, "文件夹中仍有上传任务，请稍后再试。", "upload_in_progress");
     }
     const now = new Date().toISOString();
-    await db.batch([
+    const claimToken = `trash:${crypto.randomUUID()}`;
+    const results = await db.batch([
       db
         .prepare(
-          `WITH RECURSIVE tree(id) AS (
+          `WITH RECURSIVE
+           subtree(id) AS (
              SELECT id FROM files WHERE id = ? AND owner_id = ?
              UNION ALL
              SELECT child.id
-             FROM files child JOIN tree parent ON child.parent_id = parent.id
-             WHERE child.owner_id = ? AND child.status != 'deleted'
+             FROM files child
+             JOIN subtree parent ON child.parent_id = parent.id
+             WHERE child.owner_id = ?
+           ),
+           tree(id) AS (
+             SELECT id
+             FROM files
+             WHERE id = ? AND owner_id = ? AND status = 'ready'
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM multipart_uploads upload
+                 WHERE upload.file_id IN (SELECT id FROM subtree)
+               )
+             UNION ALL
+             SELECT child.id
+             FROM files child
+             JOIN tree parent ON child.parent_id = parent.id
+             WHERE child.owner_id = ? AND child.status = 'ready'
            )
            UPDATE files
            SET status = 'deleted', deleted_at = ?, updated_at = ?
-           WHERE owner_id = ? AND id IN (SELECT id FROM tree)`,
+           WHERE owner_id = ? AND status = 'ready'
+             AND id IN (SELECT id FROM tree)`,
         )
-        .bind(id, user.id, user.id, now, now, user.id),
+        .bind(
+          id,
+          user.id,
+          user.id,
+          id,
+          user.id,
+          user.id,
+          now,
+          claimToken,
+          user.id,
+        ),
       db
         .prepare(
           `WITH RECURSIVE tree(id) AS (
-             SELECT id FROM files WHERE id = ? AND owner_id = ?
+             SELECT id
+             FROM files
+             WHERE id = ? AND owner_id = ?
+               AND status = 'deleted' AND updated_at = ?
              UNION ALL
              SELECT child.id
-             FROM files child JOIN tree parent ON child.parent_id = parent.id
+             FROM files child
+             JOIN tree parent ON child.parent_id = parent.id
              WHERE child.owner_id = ?
+               AND child.status = 'deleted' AND child.updated_at = ?
            )
            DELETE FROM shares
            WHERE owner_id = ? AND file_id IN (SELECT id FROM tree)`,
         )
-        .bind(id, user.id, user.id, user.id),
+        .bind(
+          id,
+          user.id,
+          claimToken,
+          user.id,
+          claimToken,
+          user.id,
+        ),
+      db
+        .prepare(
+          `UPDATE files
+           SET updated_at = ?
+           WHERE owner_id = ? AND status = 'deleted' AND updated_at = ?`,
+        )
+        .bind(now, user.id, claimToken),
     ]);
+    if (Number(results[0].meta.changes ?? 0) === 0) {
+      throw new HttpError(
+        409,
+        "项目状态或文件夹内容已经变化，请刷新后重试。",
+        "trash_conflict",
+      );
+    }
     await audit("file.trashed", user.id, "file", id, {
       kind: file.kind,
       size: file.size,

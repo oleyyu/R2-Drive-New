@@ -29,6 +29,41 @@
       "when": 1785323059293,
       "tag": "0003_supreme_randall",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785324507376,
+      "tag": "0004_parched_silver_surfer",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785326004403,
+      "tag": "0005_silly_proudstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785326202865,
+      "tag": "0006_small_lila_cheney",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785327606997,
+      "tag": "0007_dashing_rawhide_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785330706466,
+      "tag": "0008_unique_revanche",
+      "breakpoints": true
     }
   ]
 }

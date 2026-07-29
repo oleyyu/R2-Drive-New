@@ -45,6 +45,8 @@ R2 存储桶属于部署者自己的 Cloudflare 账号。安装助手既可以�
 | --- | --- |
 | `R2_ACCESS_KEY_ID` | R2 API Token 的 Access Key ID |
 | `R2_SECRET_ACCESS_KEY` | R2 API Token 的 Secret Access Key |
+| `R2_DRIVE_INSTALL_SECRET` | 主 Worker 安装身份的 HMAC Secret；安装助手自动生成并通过 stdin 写入 |
+| `STORAGE_FEDERATION_PRIVATE_KEY` | 多账号存储池主 Worker 的 P-256 private JWK；本机助手自动生成并通过 stdin 写入 |
 
 不要把 Secret 写进 `wrangler.jsonc`、`.env` 样例或 Git：
 
@@ -54,6 +56,14 @@ npx wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
 凭据只需要目标桶的 Object Read & Write 权限。不要使用全账号管理员 Token。两项中任意一项缺失时，前端会自动切换到 Worker 代理上传；代理分片必须小于你 Cloudflare 账号的 Worker 入站请求限制。
+
+附加账号不使用这两项 R2 Secret。每个附加账号由 Wrangler 部署一个绑定自身桶的 Storage Node Worker，节点配置只包含非 Secret 的 `NODE_ID`、`CONTROL_PUBLIC_KEY_JWK` 和 `CONTROL_ORIGIN`。本机节点清单与 P-256 恢复材料保存在被 Git 忽略且升级器保留的 `.wrangler/storage-pool` 中。
+
+目标账号必须事先启用 R2，并完成 Cloudflare 要求的付款方式设置；Wrangler
+不能代办账单。满足此前置条件后，助手会自动完成桶、Local Uploads、Worker
+和登记配置，除官方 OAuth／MFA 外不需要人工复制密钥。
+
+连接助手会在任何 Cloudflare 写操作前先把节点 provisioning intent 写入该清单，并在创建桶、开启 Local Uploads、部署 Worker 和登记成功后逐步更新。复用已有桶时，卸载只清理 R2 Drive 自己的 UUID 对象前缀并保留桶；助手开启的 Local Uploads 也是桶级配置，不会在卸载时擅自恢复或覆盖其他桶设置。
 
 ## R2 CORS
 
@@ -109,6 +119,7 @@ Worker 验证权限后返回 302 到短期 S3 预签名 GET URL。数据不穿�
 - 开放 / 仅邀请 / 关闭注册
 - 新用户默认配额
 - 每用户角色、状态与配额
+- 附加 Cloudflare R2 节点、节点写入状态和软容量预算
 - 可限制邮箱、有效期和使用次数的邀请码
 
 邀请码明文只显示一次；D1 只保存 SHA-256 摘要。API 令牌同理。

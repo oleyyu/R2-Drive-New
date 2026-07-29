@@ -475,8 +475,14 @@ export function DriveClient() {
         partSize: number;
         expectedParts: number;
         direct: boolean;
+        storageFallback?: boolean;
       };
       fileId = plan.fileId;
+      if (plan.storageFallback) {
+        updateUpload(key, {
+          message: "附加节点暂不可用，已自动回退主 R2",
+        });
+      }
       const completed: Array<{ partNumber: number; etag: string }> = [];
       const partNumbers = Array.from(
         { length: plan.expectedParts },
@@ -581,11 +587,20 @@ export function DriveClient() {
         uploadedBytes: file.size,
         message: "正在确认文件完整性",
       });
-      const completeResponse = await fetch(`/api/uploads/${fileId}/complete`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parts: completed }),
-      });
+      let completeResponse: Response | null = null;
+      const completeBody = JSON.stringify({ parts: completed });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        completeResponse = await fetch(`/api/uploads/${fileId}/complete`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: completeBody,
+        });
+        if (completeResponse.ok || completeResponse.status < 500) break;
+        if (attempt < 2) await wait(800 * 2 ** attempt);
+      }
+      if (!completeResponse) {
+        throw new Error("上传服务没有返回完成状态。");
+      }
       if (!completeResponse.ok) throw await responseError(completeResponse);
       updateUpload(key, {
         progress: 100,

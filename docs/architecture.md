@@ -4,27 +4,31 @@
 
 ```text
 ┌──────────────┐     HTTPS / session      ┌─────────────────────┐
-│ Web browser  │ ───────────────────────> │ Cloudflare Worker   │
+│ Web browser  │ ───────────────────────> │ Main Worker         │
 │ React client │ <─────────────────────── │ vinext App Router   │
-└──────┬───────┘      JSON / stream       └──────┬────────┬─────┘
-       │                                          │        │
-       │ S3 multipart PUT                         │ SQL    │ R2 binding
-       │ (short presigned URL)                    ▼        ▼
-       └──────────────────────────────────────> R2      Cloudflare D1
+└──────┬───────┘      JSON / stream       └───┬──────┬──────┬──┘
+       │                                       │      │      │ signed HTTPS
+       │ S3 multipart PUT                      │ SQL  │      ▼
+       │ (primary direct mode)                 ▼      ▼   Storage Node Worker(s)
+       └────────────────────────────────────> R2     D1          │
+                                                              R2 binding
 ```
 
 Worker 是控制面：认证、授权、配额、目录、签名、完成分片、分享和审计。R2 是数据面。直传启用后，Worker 不读取文件分片内容。
+
+主账号的 R2 继续使用原生 `FILES` binding。附加 Cloudflare 账号不能跨账号绑定到主 Worker，因此每个账号由 Wrangler 部署一个 Storage Node Worker；它只拥有该账号内目标桶的原生 binding。主 Worker 使用短时 P-256 capability 通过 HTTPS 调用节点，不保存附加账号的 R2 S3 凭据。
 
 ## 上传状态机
 
 1. 客户端提交文件名、大小、类型和父目录。
 2. Worker 校验用户状态、scope、单文件上限、已用空间和未完成任务预留空间。
-3. Worker 创建 R2 Multipart Upload，写入 `files(status=uploading)` 和 `multipart_uploads`。
-4. 客户端为每片申请 URL；有 S3 Secret 时取得短期签名，否则向 Worker 代理分片端点 PUT。直传连续失败时，同一分片自动回退代理并指数退避重试。
-5. 客户端保存每片的 `partNumber` 与 `ETag`。
-6. 完整 ETag 清单提交后，Worker 调用 R2 complete，并用最终对象大小再次校验。
-7. 文件变成 `ready`，任务删除，用户 `storage_used` 增加。
-8. 任何失败由客户端请求 abort；对象与元数据任务被清理。
+3. Worker 按节点软容量和当前使用率选择一个存储节点并原子预留空间；没有可用附加节点时选择主桶。
+4. Worker 在选定节点创建 R2 Multipart Upload，写入 `files(status=uploading)`、`storage_node_id` 和 `multipart_uploads`。一个任务创建后不会跨节点续传。
+5. 主桶有 S3 Secret 时客户端可取得短期直传 URL；附加节点使用主 Worker 到节点的签名流式代理。
+6. 客户端保存每片的 `partNumber` 与 `ETag`。
+7. 完整 ETag 清单提交后，Worker 在同一节点调用 complete，并用最终对象大小再次校验。
+8. 文件变成 `ready`，任务删除，节点预留转为已用，用户 `storage_used` 增加。
+9. 任何失败由客户端请求 abort；对象、节点预留与元数据任务被清理。
 
 ## 表
 
@@ -34,6 +38,8 @@ Worker 是控制面：认证、授权、配额、目录、签名、完成分片�
 | `sessions` | HttpOnly 会话令牌摘要与有效期 |
 | `files` | 文件夹和文件元数据、对象 key、状态、ETag、固定状态与删除时间 |
 | `multipart_uploads` | R2 upload ID、分片大小、预期片数、过期时间 |
+| `storage_nodes` | 附加账号节点、R2 桶、HTTPS endpoint、状态、软容量、已用与预留 |
+| `storage_node_enrollments` | 管理员创建的短时一次性节点登记令牌摘要 |
 | `shares` | 分享令牌摘要、到期、下载上限 |
 | `api_tokens` | 开发者令牌摘要、scope、使用时间 |
 | `invitations` | 注册邀请码摘要、邮箱限制、次数、到期 |
@@ -41,6 +47,8 @@ Worker 是控制面：认证、授权、配额、目录、签名、完成分片�
 | `audit_events` | 关键写操作审计 |
 
 对象 key 使用 `${userId}/${fileId}/blob`，不含用户原始文件名，避免路径歧义和隐私泄漏。下载名称来自 D1 并写入安全的 `Content-Disposition`。
+
+`files.storage_node_id` 与 `multipart_uploads.storage_node_id` 为空时表示旧版主桶；非空时指向一个 Storage Node。永久删除会先按节点分组，再分别删除对象。当前网页只允许暂停节点的新写入，不执行仅删除 D1 的单点断开；删除全部节点必须由本机一键卸载同时核对本机清单、Cloudflare 资源和 D1，避免产生无法定位的孤儿对象。
 
 ## 文件生命周期
 
@@ -62,5 +70,6 @@ Worker 是控制面：认证、授权、配额、目录、签名、完成分片�
 
 - 文件完成后才计入 `storage_used`。
 - 未完成上传通过 `multipart_uploads` 计入预留空间，防止并行超配额。
-- R2 complete 后再比较最终对象大小；不匹配会删除异常对象并标记失败。
+- 附加节点用条件 `UPDATE` 原子增加 `reserved_bytes`；complete 时转入 `used_bytes`，abort 时释放。
+- R2 complete 后再比较最终对象大小；不匹配会先删除异常对象，再释放预留并删除未发布的上传元数据。
 - D1 和 R2 无法进行跨产品原子事务，因此运维脚本应定期检查孤儿对象和过期上传。当前版本已保存足够的 `storage_key`、`upload_id` 与状态用于实现该任务。

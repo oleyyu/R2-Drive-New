@@ -340,6 +340,159 @@ test("setup migrates local and remote databases without runtime schema writes", 
   assert.doesNotMatch(databaseRuntime, /CREATE TABLE|ALTER TABLE/);
 });
 
+test("setup times out non-interactive commands and keeps Wrangler authorization interactive", async () => {
+  const setup = await readFile(path.join(root, "scripts", "setup.mjs"), "utf8");
+  assert.match(setup, /const DEFAULT_COMMAND_TIMEOUT_MS = 180_000/);
+  assert.match(setup, /child\.kill\("SIGTERM"\)/);
+  assert.match(setup, /child\.kill\("SIGKILL"\)/);
+  assert.match(setup, /child\.stdout\.off\("data", append\)/);
+  assert.match(setup, /child\.off\("error", onError\)/);
+  assert.match(setup, /child\.off\("close", onClose\)/);
+  assert.match(setup, /\$\{label\} 超过 \$\{Math\.ceil\(timeoutMs \/ 1_000\)\} 秒仍未完成/);
+
+  const runProcessStart = setup.indexOf("function runProcess(");
+  const runProcessEnd = setup.indexOf(
+    "\nfunction isInteractiveWranglerCommand",
+    runProcessStart,
+  );
+  assert.ok(runProcessStart >= 0 && runProcessEnd > runProcessStart);
+  const runProcessSource = setup.slice(runProcessStart, runProcessEnd);
+  const runProcess = new Function(
+    "spawn",
+    "executable",
+    "ROOT",
+    "path",
+    "redact",
+    "cleanOutput",
+    "addLog",
+    "DEFAULT_COMMAND_TIMEOUT_MS",
+    "COMMAND_TERMINATION_GRACE_MS",
+    "COMMAND_FORCE_SETTLE_MS",
+    `${runProcessSource}\nreturn runProcess;`,
+  )(
+    spawn,
+    (value) => value,
+    root,
+    path,
+    (value) => String(value),
+    (value) => String(value),
+    (job, message) => job.logs.push(String(message)),
+    180_000,
+    25,
+    25,
+  );
+
+  const job = { logs: [] };
+  const startedAt = Date.now();
+  await assert.rejects(
+    runProcess(
+      job,
+      process.execPath,
+      [
+        "-e",
+        "process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1000);",
+      ],
+      { label: "测试 Wrangler 阶段", timeoutMs: 30 },
+    ),
+    (error) => {
+      assert.match(error.message, /测试 Wrangler 阶段 超过 1 秒仍未完成/);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - startedAt < 1_000, "timed-out child must be force-settled");
+
+  const interactiveStart = setup.indexOf(
+    "function isInteractiveWranglerCommand",
+  );
+  const interactiveEnd = setup.indexOf(
+    "\nfunction runWrangler",
+    interactiveStart,
+  );
+  assert.ok(interactiveStart >= 0 && interactiveEnd > interactiveStart);
+  const interactiveSource = setup.slice(interactiveStart, interactiveEnd);
+  const isInteractiveWranglerCommand = new Function(
+    `${interactiveSource}\nreturn isInteractiveWranglerCommand;`,
+  )();
+  assert.equal(isInteractiveWranglerCommand(["login"]), true);
+  assert.equal(
+    isInteractiveWranglerCommand(["auth", "create", "r2drive-node-a1b2c3d4"]),
+    true,
+  );
+  assert.equal(isInteractiveWranglerCommand(["deploy"]), false);
+  assert.match(
+    setup,
+    /isInteractiveWranglerCommand\(args\)[\s\S]*\? \{ \.\.\.options, timeoutMs: 0 \}/,
+  );
+});
+
+test("storage-pool credential probes time out without double-settling or logging credentials", async () => {
+  const source = await readFile(
+    path.join(root, "scripts", "storage-pool.mjs"),
+    "utf8",
+  );
+  assert.match(source, /const PROFILE_CREDENTIAL_TIMEOUT_MS = 180_000/);
+  assert.match(source, /child\.kill\("SIGTERM"\)/);
+  assert.match(source, /child\.kill\("SIGKILL"\)/);
+  assert.match(source, /if \(settled\) return/);
+  assert.match(source, /child\.stdout\.off\("data", collectStdout\)/);
+  assert.match(source, /child\.off\("error", onError\)/);
+  assert.match(source, /child\.off\("close", onClose\)/);
+  assert.doesNotMatch(
+    source,
+    /addLog\([^)]*(?:parsed\.token|parsed\.key|stdout)/,
+  );
+
+  const captureStart = source.indexOf("function captureProfileCredentials(");
+  const captureEnd = source.indexOf(
+    "\nfunction normalizeWorkerEndpoint",
+    captureStart,
+  );
+  assert.ok(captureStart >= 0 && captureEnd > captureStart);
+  const captureSource = source.slice(captureStart, captureEnd);
+  const captureProfileCredentials = new Function(
+    "spawn",
+    "executable",
+    "validateProfile",
+    "authEnvironment",
+    "cleanAnsi",
+    "parseJsonOutput",
+    "PROFILE_CREDENTIAL_TIMEOUT_MS",
+    "PROFILE_CREDENTIAL_TERMINATION_GRACE_MS",
+    "PROFILE_CREDENTIAL_FORCE_SETTLE_MS",
+    `${captureSource}\nreturn captureProfileCredentials;`,
+  )(
+    () =>
+      spawn(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1000);",
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    (value) => value,
+    (value) => value,
+    () => process.env,
+    (value) => String(value),
+    () => {
+      throw new Error("timeout path must not parse credentials");
+    },
+    30,
+    25,
+    25,
+  );
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    captureProfileCredentials(root, "default"),
+    /读取 Wrangler 登录超过 1 秒/,
+  );
+  assert.ok(
+    Date.now() - startedAt < 1_000,
+    "credential probe must be force-settled after its deadline",
+  );
+});
+
 test("admin settings exposes one-click Wrangler upload acceleration", async () => {
   const [settings, setup] = await Promise.all([
     readFile(path.join(root, "components", "SettingsClient.tsx"), "utf8"),
@@ -348,7 +501,6 @@ test("admin settings exposes one-click Wrangler upload acceleration", async () =
   assert.match(settings, /user\.role === "admin"/);
   assert.match(settings, /开启上传加速/);
   assert.match(settings, /127\.0\.0\.1:8788\/\?step=upload-acceleration&autostart=1/);
-  assert.doesNotMatch(settings, /postMessage/);
   assert.match(settings, /uploadConcurrency: 6/);
   assert.match(settings, /networkProfile: "throughput"/);
   assert.match(setup, /async function enableUploadAcceleration/);
@@ -359,6 +511,40 @@ test("admin settings exposes one-click Wrangler upload acceleration", async () =
   assert.match(setup, /upload-acceleration\.json/);
   assert.match(setup, /saveUploadAccelerationState/);
   assert.doesNotMatch(setup, /oauth\.pipelines\.cloudflare\.com/);
+});
+
+test("multi-account storage pool uses Wrangler nodes without storing R2 credentials", async () => {
+  const [
+    settings,
+    schema,
+    migration,
+    enrollmentRoute,
+    setup,
+    secrets,
+  ] = await Promise.all([
+    readFile(path.join(root, "components", "SettingsClient.tsx"), "utf8"),
+    readFile(path.join(root, "db", "schema.ts"), "utf8"),
+    readFile(path.join(root, "drizzle", "0004_parched_silver_surfer.sql"), "utf8"),
+    readFile(
+      path.join(root, "app", "api", "storage-nodes", "enroll", "route.ts"),
+      "utf8",
+    ),
+    readFile(path.join(root, "scripts", "setup.mjs"), "utf8"),
+    readFile(path.join(root, "worker-secrets.d.ts"), "utf8"),
+  ]);
+  assert.match(settings, /多账号存储池/);
+  assert.match(settings, /连接另一个 Cloudflare 账号/);
+  assert.match(settings, /storage-node-connected/);
+  assert.match(schema, /storage_nodes/);
+  assert.match(schema, /storage_node_enrollments/);
+  assert.match(schema, /storageNodeId/);
+  assert.match(migration, /ADD `storage_node_id`/);
+  assert.match(migration, /reserved_bytes/);
+  assert.match(enrollmentRoute, /signedNodeFetch/);
+  assert.match(enrollmentRoute, /storage_node\.connected/);
+  assert.doesNotMatch(enrollmentRoute, /secretAccessKey|R2_SECRET_ACCESS_KEY/);
+  assert.match(setup, /storage-pool/);
+  assert.match(secrets, /STORAGE_FEDERATION_PRIVATE_KEY/);
 });
 
 test("updates restart a stale setup helper instead of mixing UI and API versions", async () => {

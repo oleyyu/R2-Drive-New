@@ -2,7 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,28 @@ import {
   rollbackReleaseTree,
 } from "./updater.mjs";
 import { findD1DatabaseByName, parseWranglerJson } from "./wrangler-output.mjs";
+import { createStoragePoolService } from "./storage-pool.mjs";
+import {
+  assertLegacyWorkerVersionBindings,
+  assertLegacyBucketEvidence,
+  assertPrimaryBucketOwnership,
+  assertPrimaryWorkerOwnership,
+  assertWorkerVersionInstallationBinding,
+  bindPrimaryOwnershipIntent,
+  createPrimaryOwnershipIntent,
+  createPrimaryWorkerChallenge,
+  ensurePrimaryOwnershipIntent,
+  PRIMARY_WORKER_IDENTITY_PATH,
+  PRIMARY_WORKER_ID_VAR,
+  PRIMARY_WORKER_SECRET_NAME,
+  primaryBucketOwnershipBody,
+  readPrimaryOwnershipIntent,
+  recordPrimaryBucketObservation,
+  r2ObjectsFromApiPayload,
+  setPrimaryBucketManagement,
+  validatePrimaryOwnershipIntent,
+  writePrimaryOwnershipIntent,
+} from "./primary-ownership.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_PATH = path.join(ROOT, "package.json");
@@ -30,6 +52,11 @@ const CONFIG_PATH = path.join(ROOT, "wrangler.jsonc");
 const DEV_VARS_PATH = path.join(ROOT, ".dev.vars");
 const CORS_PATH = path.join(ROOT, "config", "r2-cors.local.json");
 const ACCELERATION_STATE_PATH = path.join(ROOT, ".wrangler", "upload-acceleration.json");
+const PRIMARY_OWNERSHIP_PATH = path.join(
+  ROOT,
+  ".wrangler",
+  "primary-ownership.json",
+);
 const UI_PATH = path.join(ROOT, "scripts", "setup-ui.html");
 const HOST = "127.0.0.1";
 const requestedPort = Number.parseInt(process.env.R2_DRIVE_SETUP_PORT ?? "8788", 10);
@@ -44,6 +71,9 @@ const LOCAL_PORT =
 const LOCAL_ORIGIN = `http://localhost:${LOCAL_PORT}`;
 const LOCAL_ENTRY_URL = `${LOCAL_ORIGIN}/start`;
 const CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4";
+const DEFAULT_COMMAND_TIMEOUT_MS = 180_000;
+const COMMAND_TERMINATION_GRACE_MS = 2_000;
+const COMMAND_FORCE_SETTLE_MS = 1_000;
 const csrfToken = randomBytes(32).toString("hex");
 const cloudflareDispatcher = new EnvHttpProxyAgent();
 const runtimeVersion = JSON.parse(await readFile(PACKAGE_PATH, "utf8")).version;
@@ -289,6 +319,7 @@ function runProcess(job, program, args, options = {}) {
       WRANGLER_SEND_METRICS: "false",
       WRANGLER_LOG_PATH: path.join(ROOT, ".wrangler", "setup.log"),
     };
+    for (const name of options.unsetEnv ?? []) delete environment[name];
     if (options.ci) environment.CI = "1";
     const child = spawn(executable(program), args, {
       cwd: ROOT,
@@ -297,37 +328,127 @@ function runProcess(job, program, args, options = {}) {
       stdio: ["pipe", "pipe", "pipe"],
     });
     let output = "";
+    let settled = false;
+    let timeoutError = null;
+    let timeoutTimer;
+    let forceKillTimer;
+    let forceSettleTimer;
     const append = (chunk) => {
       const safe = redact(cleanOutput(chunk), options.redactions);
       output += safe;
       if (output.length > 220_000) output = output.slice(-220_000);
       addLog(job, safe);
     };
+    const cleanup = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(forceKillTimer);
+      clearTimeout(forceSettleTimer);
+      child.stdout.off("data", append);
+      child.stderr.off("data", append);
+      child.off("error", onError);
+      child.off("close", onClose);
+    };
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(output);
+    };
+    const onError = (error) => {
+      if (timeoutError) {
+        timeoutError.commandOutput = output;
+        finish(timeoutError);
+        return;
+      }
+      finish(error);
+    };
+    const onClose = (code) => {
+      if (timeoutError) {
+        timeoutError.commandOutput = output;
+        finish(timeoutError);
+        return;
+      }
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const error = new Error(`${label} 退出，状态码 ${code}。`);
+      error.commandOutput = output;
+      finish(error);
+    };
     child.stdout.on("data", append);
     child.stderr.on("data", append);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(output);
-      else reject(new Error(`${label} 退出，状态码 ${code}。`));
-    });
+    child.on("error", onError);
+    child.on("close", onClose);
+
+    const timeoutMs =
+      options.timeoutMs === 0
+        ? 0
+        : Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+          ? options.timeoutMs
+          : DEFAULT_COMMAND_TIMEOUT_MS;
+    if (timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timeoutError = new Error(
+          `${label} 超过 ${Math.ceil(timeoutMs / 1_000)} 秒仍未完成，已停止这个阶段。请检查网络后重试。`,
+        );
+        timeoutError.commandOutput = output;
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // The process may have exited between the timer and the signal.
+        }
+        forceKillTimer = setTimeout(() => {
+          if (settled) return;
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // The close/error listener, or the fallback below, will settle it.
+          }
+          forceSettleTimer = setTimeout(() => {
+            timeoutError.commandOutput = output;
+            finish(timeoutError);
+          }, COMMAND_FORCE_SETTLE_MS);
+        }, COMMAND_TERMINATION_GRACE_MS);
+      }, timeoutMs);
+    }
     if (options.input !== undefined) child.stdin.end(options.input);
     else child.stdin.end();
   });
 }
 
+function isInteractiveWranglerCommand(args) {
+  return (
+    args[0] === "login" ||
+    (args[0] === "auth" && args[1] === "create")
+  );
+}
+
 function runWrangler(job, args, options = {}) {
-  return runProcess(job, "npx", ["--no-install", "wrangler", ...args], options);
+  return runProcess(
+    job,
+    "npx",
+    ["--no-install", "wrangler", ...args],
+    isInteractiveWranglerCommand(args)
+      ? { ...options, timeoutMs: 0 }
+      : options,
+  );
 }
 
 function runNpm(job, args, options = {}) {
   return runProcess(job, "npm", args, options);
 }
 
-function githubFetch(url, options = {}) {
+function externalFetch(url, options = {}) {
   return undiciFetch(url, {
     ...options,
     dispatcher: cloudflareDispatcher,
   });
+}
+
+function githubFetch(url, options = {}) {
+  return externalFetch(url, options);
 }
 
 function publicJob(job) {
@@ -495,6 +616,350 @@ async function writeJsonAtomic(filePath, value) {
   await rename(temporary, filePath);
 }
 
+function isMissingPrimaryR2Object(error) {
+  const output = String(error?.commandOutput || error?.message || "");
+  return /NoSuchKey|object.+not found|does not exist|code:\s*10007/i.test(output);
+}
+
+function isMissingPrimaryCloudflareResource(error) {
+  const output = String(error?.commandOutput || error?.message || "");
+  return /does not exist|not found|NoSuchBucket|no deployments|code:\s*1000[67]/i.test(
+    output,
+  );
+}
+
+async function observePrimaryBucket(intent) {
+  const response = await cloudflareApi(
+    `/accounts/${encodeURIComponent(intent.accountId)}/r2/buckets/${encodeURIComponent(intent.r2Name)}`,
+    undefined,
+    { errorLabel: `读取 R2 存储桶 ${intent.r2Name} 创建时间` },
+  );
+  const observed = recordPrimaryBucketObservation(
+    intent,
+    response.result?.creation_date,
+  );
+  return writePrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, observed);
+}
+
+async function readPrimaryBucketMarker(job, intent) {
+  const outputPath = path.join(
+    ROOT,
+    ".wrangler",
+    `primary-marker-${process.pid}-${randomBytes(6).toString("hex")}.json`,
+  );
+  await mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  try {
+    await runWrangler(
+      job,
+      [
+        "r2",
+        "object",
+        "get",
+        `${intent.r2Name}/${intent.bucketMarkerKey}`,
+        "--file",
+        outputPath,
+        "--remote",
+      ],
+      {
+        label: `核对 ${intent.r2Name} 的 R2 Drive 归属标记`,
+        env: { CLOUDFLARE_ACCOUNT_ID: intent.accountId },
+      },
+    );
+    const info = await stat(outputPath);
+    if (!info.isFile() || info.size > 4 * 1024) {
+      throw new Error("主 R2 归属标记内容异常，已停止以保护现有数据。");
+    }
+    return readFile(outputPath, "utf8");
+  } catch (error) {
+    if (isMissingPrimaryR2Object(error)) return null;
+    throw error;
+  } finally {
+    await rm(outputPath, { force: true });
+  }
+}
+
+async function ensurePrimaryBucketOwnership(job, source, options = {}) {
+  let intent = validatePrimaryOwnershipIntent(source);
+  let marker = await readPrimaryBucketMarker(job, intent);
+  if (marker !== null) {
+    assertPrimaryBucketOwnership(intent, marker);
+    intent = await observePrimaryBucket(intent);
+  } else {
+    if (options.allowMarkerCreation !== true) {
+      throw new Error(
+        "主 R2 缺少原随机归属标记；可能是中断操作或同名重建。为避免认领现有桶，未写入新标记。",
+      );
+    }
+    intent = await observePrimaryBucket(intent);
+  }
+  if (marker === null) {
+    const body = primaryBucketOwnershipBody(intent);
+    await runWrangler(
+      job,
+      [
+        "r2",
+        "object",
+        "put",
+        `${intent.r2Name}/${intent.bucketMarkerKey}`,
+        "--pipe",
+        "--remote",
+        "--force",
+        "--content-type",
+        "application/json",
+      ],
+      {
+        label: `写入 ${intent.r2Name} 的 R2 Drive 归属标记`,
+        env: { CLOUDFLARE_ACCOUNT_ID: intent.accountId },
+        input: body,
+        redactions: [intent.bucketMarkerToken],
+      },
+    );
+    marker = await readPrimaryBucketMarker(job, intent);
+  }
+  if (marker === null) {
+    throw new Error("主 R2 归属标记写入后仍无法读取，已停止配置。");
+  }
+  assertPrimaryBucketOwnership(intent, marker);
+  intent = await writePrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, {
+    ...intent,
+    bucketMarkerVerifiedAt: new Date().toISOString(),
+  });
+  return intent;
+}
+
+function primaryTargetFromConfig(config) {
+  const accountId = String(
+    config.account_id ?? config.vars?.R2_ACCOUNT_ID ?? "",
+  ).toLowerCase();
+  const d1 = config.d1_databases?.[0] ?? {};
+  const r2Name = String(
+    config.r2_buckets?.[0]?.bucket_name ?? config.vars?.R2_BUCKET_NAME ?? "",
+  );
+  const workerName = String(config.name ?? "");
+  const d1Id = String(d1.database_id ?? "").toLowerCase();
+  if (
+    !/^[0-9a-f]{32}$/.test(accountId) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      d1Id,
+    ) ||
+    !/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/.test(r2Name) ||
+    !/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/.test(workerName)
+  ) {
+    return null;
+  }
+  return {
+    accountId,
+    d1Id,
+    d1Name: String(d1.database_name || ""),
+    r2Name,
+    workerName,
+  };
+}
+
+async function readActiveWorkerVersions(job, target, options = {}) {
+  let deployment;
+  try {
+    const output = await runWrangler(
+      job,
+      [
+        "deployments",
+        "status",
+        "--name",
+        target.workerName,
+        "--json",
+        "--config",
+        CONFIG_PATH,
+      ],
+      {
+        label: `核对 Worker ${target.workerName} 当前版本`,
+        env: { CLOUDFLARE_ACCOUNT_ID: target.accountId },
+      },
+    );
+    deployment = parseWranglerJson(output, "Wrangler Worker deployment");
+  } catch (error) {
+    if (options.allowMissing && isMissingPrimaryCloudflareResource(error)) {
+      return null;
+    }
+    throw error;
+  }
+  const active = Array.isArray(deployment?.versions)
+    ? deployment.versions.filter((entry) => Number(entry?.percentage) > 0)
+    : [];
+  if (!active.length) {
+    throw new Error("线上 Worker 没有可核对的生效版本，已停止归属操作。");
+  }
+  const versions = [];
+  for (const entry of active) {
+    const id = String(entry.version_id ?? entry.versionId ?? "");
+    if (!/^[0-9a-f-]{32,64}$/i.test(id)) {
+      throw new Error("Wrangler 返回的 Worker version_id 无效。");
+    }
+    const output = await runWrangler(
+      job,
+      [
+        "versions",
+        "view",
+        id,
+        "--name",
+        target.workerName,
+        "--json",
+        "--config",
+        CONFIG_PATH,
+      ],
+      {
+        label: `核对 Worker 版本 ${id}`,
+        env: { CLOUDFLARE_ACCOUNT_ID: target.accountId },
+      },
+    );
+    versions.push(parseWranglerJson(output, "Wrangler Worker version"));
+  }
+  return versions;
+}
+
+function databaseIdFromListEntry(entry) {
+  return String(
+    entry?.uuid ?? entry?.database_id ?? entry?.databaseId ?? entry?.id ?? "",
+  ).toLowerCase();
+}
+
+async function legacyPrimaryBucketEvidence(job, target) {
+  const d1Output = await runWrangler(job, ["d1", "list", "--json"], {
+    label: `核对旧版 D1 ${target.d1Name} 的 exact database_id`,
+    env: { CLOUDFLARE_ACCOUNT_ID: target.accountId },
+  });
+  const databases = parseWranglerJson(d1Output, "Wrangler D1");
+  const database = Array.isArray(databases)
+    ? databases.find(
+        (entry) =>
+          databaseIdFromListEntry(entry) === target.d1Id &&
+          String(entry?.name ?? "") === target.d1Name,
+      )
+    : null;
+  if (!database) {
+    throw new Error("旧版 D1 的 exact database_id 无法复核，不能迁移资源归属。");
+  }
+
+  const sampleOutput = await runWrangler(
+    job,
+    [
+      "d1",
+      "execute",
+      target.d1Name,
+      "--remote",
+      "--command",
+      "SELECT storage_key, size, etag FROM files WHERE kind = 'file' AND status = 'ready' AND storage_key IS NOT NULL ORDER BY id LIMIT 3",
+      "--json",
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      label: "抽样核对旧版 D1 与主 R2 文件",
+      env: { CLOUDFLARE_ACCOUNT_ID: target.accountId },
+      ci: true,
+    },
+  );
+  const samplePayload = parseWranglerJson(sampleOutput, "Wrangler D1 sample");
+  const samples = Array.isArray(samplePayload)
+    ? samplePayload.flatMap((entry) =>
+        Array.isArray(entry?.results) ? entry.results : [],
+      )
+    : [];
+  const objects = [];
+  for (const sample of samples) {
+    const key = String(sample?.storage_key ?? "");
+    if (!key) continue;
+    const listed = await cloudflareApi(
+      `/accounts/${encodeURIComponent(target.accountId)}/r2/buckets/${encodeURIComponent(target.r2Name)}/objects`,
+      { prefix: key, per_page: 10 },
+      { errorLabel: `核对旧版 R2 对象 ${key}` },
+    );
+    const candidates = r2ObjectsFromApiPayload(listed);
+    objects.push(...candidates.filter((object) => object?.key === key));
+  }
+  const bucket = await cloudflareApi(
+    `/accounts/${encodeURIComponent(target.accountId)}/r2/buckets/${encodeURIComponent(target.r2Name)}`,
+    undefined,
+    { errorLabel: `核对旧版 R2 ${target.r2Name}` },
+  );
+  const result = assertLegacyBucketEvidence({
+    samples,
+    objects,
+    bucketCreationDate: bucket.result?.creation_date,
+    databaseCreationDate:
+      database.created_at ?? database.created_on ?? database.createdAt,
+  });
+  return {
+    ...result,
+    bucketCreationDate: bucket.result?.creation_date,
+  };
+}
+
+async function migrateLegacyPrimaryOwnership(job, config) {
+  const target = primaryTargetFromConfig(config);
+  if (!target) {
+    throw new Error("旧版实例配置不完整，不能安全迁移主资源归属。");
+  }
+  const versions = await readActiveWorkerVersions(job, target);
+  for (const version of versions) {
+    assertLegacyWorkerVersionBindings(version, target);
+  }
+  const evidence = await legacyPrimaryBucketEvidence(job, target);
+
+  let intent = createPrimaryOwnershipIntent(target);
+  intent = setPrimaryBucketManagement(
+    {
+      ...intent,
+      legacyMigration: true,
+    },
+    false,
+  );
+  intent = recordPrimaryBucketObservation(
+    intent,
+    evidence.bucketCreationDate,
+  );
+  intent = bindPrimaryOwnershipIntent(intent, target);
+  intent = await writePrimaryOwnershipIntent(
+    PRIMARY_OWNERSHIP_PATH,
+    intent,
+  );
+  intent = await ensurePrimaryBucketOwnership(job, intent, {
+    allowMarkerCreation: true,
+  });
+  config.vars = {
+    ...config.vars,
+    [PRIMARY_WORKER_ID_VAR]: intent.installId,
+  };
+  await writeJsonAtomic(CONFIG_PATH, config);
+  addLog(
+    job,
+    `\n✓ 旧版主资源已通过 exact D1/Worker binding 与 ${evidence.kind === "ready-object" ? "R2 文件抽样" : "资源创建顺序"}复核，并建立随机归属凭证。\n`,
+  );
+  return intent;
+}
+
+async function ensurePrimarySetupIntent(job, target) {
+  const existing = await readPrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, {
+    allowMissing: true,
+  });
+  if (existing) {
+    return ensurePrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, target);
+  }
+  const config = await readConfig();
+  const configured = primaryTargetFromConfig(config);
+  if (configured) {
+    if (
+      configured.accountId !== String(target.accountId).toLowerCase() ||
+      configured.r2Name !== target.r2Name
+    ) {
+      throw new Error(
+        "当前目录已有未迁移的旧版实例，不能用新的账号或桶覆盖；请先检查更新以建立安全归属凭证。",
+      );
+    }
+    return migrateLegacyPrimaryOwnership(job, config);
+  }
+  return ensurePrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, target);
+}
+
 function makeCors(origin) {
   return {
     rules: [
@@ -526,6 +991,7 @@ async function updateProjectConfig(values) {
     PUBLIC_SHARE_CACHE_SECONDS: String(values.publicShareCacheSeconds),
     R2_BUCKET_NAME: values.r2Name,
     R2_ACCOUNT_ID: values.accountId,
+    [PRIMARY_WORKER_ID_VAR]: values.installId,
   };
   config.d1_databases = [
     {
@@ -602,6 +1068,7 @@ function normalizeR2Creation(body) {
 async function createR2Bucket(job, body) {
   const values = normalizeR2Creation(body);
   const accountEnvironment = { CLOUDFLARE_ACCOUNT_ID: values.accountId };
+  let ownership = await ensurePrimarySetupIntent(job, values);
 
   try {
     await runWrangler(
@@ -612,12 +1079,34 @@ async function createR2Bucket(job, body) {
         env: accountEnvironment,
       },
     );
+    const establishingExistingOwnership = ownership.managedBucket === null;
+    if (ownership.managedBucket === null) {
+      ownership = await writePrimaryOwnershipIntent(
+        PRIMARY_OWNERSHIP_PATH,
+        setPrimaryBucketManagement(ownership, false),
+      );
+    }
+    ownership = await ensurePrimaryBucketOwnership(job, ownership, {
+      allowMarkerCreation: establishingExistingOwnership,
+    });
     addLog(job, `\n✓ ${values.r2Name} 已经存在，将直接使用，不会重复创建。\n`);
     return { r2Name: values.r2Name, created: false, location: "existing" };
-  } catch {
+  } catch (error) {
+    if (!isMissingPrimaryCloudflareResource(error)) throw error;
     addLog(job, `\n未找到 ${values.r2Name}，开始在当前账号中创建私人 R2 存储桶。\n`);
   }
 
+  if (ownership.managedBucket === false) {
+    throw new Error(
+      "原先复用的主 R2 已不存在，不能用同名新桶替换。请保留本机归属记录并人工核对。",
+    );
+  }
+  if (ownership.managedBucket === null) {
+    ownership = await writePrimaryOwnershipIntent(
+      PRIMARY_OWNERSHIP_PATH,
+      setPrimaryBucketManagement(ownership, true),
+    );
+  }
   try {
     await runWrangler(
       job,
@@ -642,6 +1131,9 @@ async function createR2Bucket(job, body) {
       env: accountEnvironment,
     },
   );
+  ownership = await ensurePrimaryBucketOwnership(job, ownership, {
+    allowMarkerCreation: true,
+  });
   addLog(job, `\n✓ 私人 R2 存储桶 ${values.r2Name} 已创建，位置提示为 APAC。\n`);
   return { r2Name: values.r2Name, created: true, location: "apac" };
 }
@@ -662,6 +1154,7 @@ async function configureCloudflare(job, body) {
   let d1Id = values.d1Id;
   let d1Created = false;
   const accountEnvironment = { CLOUDFLARE_ACCOUNT_ID: values.accountId };
+  let ownership = await ensurePrimarySetupIntent(job, values);
 
   try {
     await runWrangler(
@@ -672,7 +1165,18 @@ async function configureCloudflare(job, body) {
         env: accountEnvironment,
       },
     );
-  } catch {
+    const establishingExistingOwnership = ownership.managedBucket === null;
+    if (ownership.managedBucket === null) {
+      ownership = await writePrimaryOwnershipIntent(
+        PRIMARY_OWNERSHIP_PATH,
+        setPrimaryBucketManagement(ownership, false),
+      );
+    }
+    ownership = await ensurePrimaryBucketOwnership(job, ownership, {
+      allowMarkerCreation: establishingExistingOwnership,
+    });
+  } catch (error) {
+    if (!isMissingPrimaryCloudflareResource(error)) throw error;
     throw new Error(
       `当前 Cloudflare 账号中没有找到名为 ${values.r2Name} 的 R2 存储桶。请检查名称，或点击“一键创建 R2 桶（网盘）”。`,
     );
@@ -733,7 +1237,19 @@ async function configureCloudflare(job, body) {
     }
   }
 
-  await updateProjectConfig({ ...values, d1Id });
+  ownership = bindPrimaryOwnershipIntent(ownership, {
+    ...values,
+    d1Id,
+  });
+  ownership = await writePrimaryOwnershipIntent(
+    PRIMARY_OWNERSHIP_PATH,
+    ownership,
+  );
+  await updateProjectConfig({
+    ...values,
+    d1Id,
+    installId: ownership.installId,
+  });
   addLog(job, "\n✓ 已写入 wrangler.jsonc 与本实例 CORS 文件。\n");
 
   if (values.enableLocalUploads) {
@@ -793,6 +1309,7 @@ async function enableUploadAcceleration(job) {
   if (!customHostname) {
     throw new Error("请先完成域名绑定，再开启上传加速。");
   }
+  await preparePrimaryOwnershipForDeploy(job, config);
   const accountEnvironment = { CLOUDFLARE_ACCOUNT_ID: accountId };
 
   setJobProgress(job, 8, "checking", "正在确认 Wrangler 登录和当前网盘");
@@ -915,6 +1432,107 @@ function validateSecretPair(accessKeyId, secretAccessKey) {
   }
 }
 
+async function preparePrimaryOwnershipForDeploy(job, config) {
+  const target = primaryTargetFromConfig(config);
+  if (!target) {
+    throw new Error("当前主资源配置不完整，不能建立安全的 Worker 归属。");
+  }
+  let intent = await readPrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, {
+    allowMissing: true,
+  });
+  if (!intent) {
+    intent = await migrateLegacyPrimaryOwnership(job, config);
+  }
+  intent = bindPrimaryOwnershipIntent(intent, target);
+  if (intent.managedBucket === null) {
+    throw new Error("主 R2 缺少创建/复用边界，不能发布 Worker。");
+  }
+  intent = await writePrimaryOwnershipIntent(
+    PRIMARY_OWNERSHIP_PATH,
+    intent,
+  );
+  intent = await ensurePrimaryBucketOwnership(job, intent);
+
+  if (config.vars?.[PRIMARY_WORKER_ID_VAR] !== intent.installId) {
+    config.vars = {
+      ...config.vars,
+      [PRIMARY_WORKER_ID_VAR]: intent.installId,
+    };
+    await writeJsonAtomic(CONFIG_PATH, config);
+  }
+
+  const versions = await readActiveWorkerVersions(job, target, {
+    allowMissing: true,
+  });
+  if (versions) {
+    for (const version of versions) {
+      assertLegacyWorkerVersionBindings(version, target);
+      if (!intent.legacyMigration || intent.workerIdentityVerifiedAt) {
+        assertWorkerVersionInstallationBinding(version, intent.installId);
+      }
+    }
+  }
+  return intent;
+}
+
+async function putPrimaryWorkerIdentitySecret(job, intent) {
+  await runWrangler(
+    job,
+    [
+      "secret",
+      "put",
+      PRIMARY_WORKER_SECRET_NAME,
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      label: `写入主 Worker 归属 Secret ${PRIMARY_WORKER_SECRET_NAME}`,
+      input: `${intent.workerIdentitySecret}\n`,
+      redactions: [intent.workerIdentitySecret],
+    },
+  );
+}
+
+async function verifyPrimaryWorkerIdentity(job, source, origin) {
+  let intent = validatePrimaryOwnershipIntent(source);
+  const challenge = createPrimaryWorkerChallenge();
+  const url = new URL(PRIMARY_WORKER_IDENTITY_PATH, origin);
+  url.searchParams.set("challenge", challenge);
+  let lastError = null;
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    try {
+      const response = await externalFetch(url, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(10_000),
+        headers: { accept: "application/json" },
+      });
+      const text = await response.text();
+      if (text.length > 4 * 1024) {
+        throw new Error("主 Worker 身份响应过大。");
+      }
+      const payload = JSON.parse(text);
+      if (!response.ok) {
+        throw new Error(`主 Worker 身份端点返回 HTTP ${response.status}。`);
+      }
+      assertPrimaryWorkerOwnership(intent, challenge, payload);
+      intent = await writePrimaryOwnershipIntent(PRIMARY_OWNERSHIP_PATH, {
+        ...intent,
+        workerIdentityVerifiedAt: new Date().toISOString(),
+      });
+      addLog(job, "\n✓ 主 Worker 随机挑战身份已复核。\n");
+      return intent;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 10) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+  }
+  throw new Error(
+    `主 Worker 已发布但随机身份复核失败：${lastError instanceof Error ? lastError.message : String(lastError)} 请保留本机归属文件并重试，卸载不会按名称猜测。`,
+  );
+}
+
 async function deployToOwnAccount(job, body) {
   if (body.confirm !== true) throw new Error("部署必须由当前用户明确确认。");
   const config = await readConfig();
@@ -923,6 +1541,7 @@ async function deployToOwnAccount(job, body) {
   if (!database || !config.d1_databases?.[0]?.database_id || !bucket) {
     throw new Error("请先完成资源配置，再部署。");
   }
+  let ownership = await preparePrimaryOwnershipForDeploy(job, config);
   const customHostname = assertCustomHostname(body.customHostname);
   const { origin } = await setProjectCustomDomain(customHostname);
   addLog(job, `\n✓ 将只发布到自定义域名 ${origin}，workers.dev 已关闭。\n`);
@@ -941,6 +1560,8 @@ async function deployToOwnAccount(job, body) {
   await runNpm(job, ["run", "deploy"], {
     label: `部署并绑定 ${customHostname}`,
   });
+  await putPrimaryWorkerIdentitySecret(job, ownership);
+  ownership = await verifyPrimaryWorkerIdentity(job, ownership, origin);
 
   const accessKeyId = typeof body.accessKeyId === "string" ? body.accessKeyId : "";
   const secretAccessKey =
@@ -1219,6 +1840,12 @@ async function installLatestUpdate(job, body) {
     setJobProgress(job, 64, "testing", "正在检查新版页面和代码");
     await runNpm(job, ["run", "check"], { label: "检查新版" });
 
+    setJobProgress(job, 72, "ownership", "正在复核主 Worker 与 R2 归属");
+    let primaryOwnership = await preparePrimaryOwnershipForDeploy(
+      job,
+      await readConfig(),
+    );
+
     setJobProgress(job, 76, "migrating", "正在升级本机资料数据库");
     await runWrangler(
       job,
@@ -1238,6 +1865,12 @@ async function installLatestUpdate(job, body) {
       await runNpm(job, ["run", "deploy"], {
         label: `发布 v${release.version} 到 ${customHostname}`,
       });
+      await putPrimaryWorkerIdentitySecret(job, primaryOwnership);
+      primaryOwnership = await verifyPrimaryWorkerIdentity(
+        job,
+        primaryOwnership,
+        `https://${customHostname}`,
+      );
     }
 
     setJobProgress(job, 100, "ready", `v${release.version} 已安装完成`);
@@ -1381,25 +2014,37 @@ async function cloudflareAuthHeaders() {
   throw new Error("没有找到 Wrangler 登录授权。请返回第一步，重新连接 Cloudflare 账号。");
 }
 
-async function cloudflareApi(pathname, query) {
+async function cloudflareApi(pathname, query, options = {}) {
   const url = new URL(`${CLOUDFLARE_API_BASE_URL}${pathname}`);
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, String(value));
     }
   }
-  const headers = await cloudflareAuthHeaders();
+  const headers = new Headers(options.headers ?? (await cloudflareAuthHeaders()));
+  if (options.body !== undefined) headers.set("content-type", "application/json");
   let response;
   try {
     response = await undiciFetch(url, {
+      method: options.method ?? "GET",
       headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
       dispatcher: cloudflareDispatcher,
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
-    throw new Error("连接 Cloudflare 获取域名失败。请检查网络或代理设置后重试。");
+    throw new Error(
+      `${options.errorLabel || "连接 Cloudflare"}失败。请检查网络或代理设置后重试。`,
+    );
   }
   const payload = await response.json().catch(() => null);
+  if (options.allowFailure && (!response.ok || !payload?.success)) {
+    return {
+      ...(payload && typeof payload === "object" ? payload : {}),
+      success: false,
+      httpStatus: response.status,
+    };
+  }
   if (!response.ok || !payload?.success) {
     const apiMessage = Array.isArray(payload?.errors)
       ? payload.errors
@@ -1408,15 +2053,37 @@ async function cloudflareApi(pathname, query) {
           .join("；")
       : "";
     if (response.status === 401 || response.status === 403) {
-      throw new Error("Cloudflare 授权没有读取域名的权限。请返回第一步重新连接账号。");
+      throw new Error(
+        `Cloudflare 授权没有${options.errorLabel || "执行此操作"}的权限，请重新连接账号。`,
+      );
     }
     throw new Error(
       apiMessage
-        ? `Cloudflare 暂时无法读取域名：${apiMessage.slice(0, 240)}`
-        : `Cloudflare 暂时无法读取域名（HTTP ${response.status}）。`,
+        ? `${options.errorLabel || "Cloudflare 操作"}失败：${apiMessage.slice(0, 240)}`
+        : `${options.errorLabel || "Cloudflare 操作"}失败（HTTP ${response.status}）。`,
     );
   }
-  return payload;
+  return { ...payload, httpStatus: response.status };
+}
+
+const storagePoolService = createStoragePoolService({
+  root: ROOT,
+  configPath: CONFIG_PATH,
+  runWrangler,
+  cloudflareApi,
+  externalFetch,
+  addLog,
+  setJobProgress,
+});
+
+async function prepareStoragePool(job, body) {
+  await preparePrimaryOwnershipForDeploy(job, await readConfig());
+  return storagePoolService.prepare(job, body);
+}
+
+async function connectStoragePool(job, body) {
+  await preparePrimaryOwnershipForDeploy(job, await readConfig());
+  return storagePoolService.connect(job, body);
 }
 
 async function listCloudflareZones(job, body) {
@@ -1596,6 +2263,42 @@ async function route(request, response) {
       response,
       202,
       startJob("upload-acceleration", enableUploadAcceleration),
+    );
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/storage-pool/prepare") {
+    const body = await readJson(request);
+    sendJson(
+      response,
+      202,
+      startJob("storage-pool-prepare", (job) =>
+        prepareStoragePool(job, body),
+      ),
+    );
+    return;
+  }
+  if (
+    request.method === "POST" &&
+    url.pathname === "/api/storage-pool/profile/create"
+  ) {
+    const body = await readJson(request);
+    sendJson(
+      response,
+      202,
+      startJob("storage-pool-profile", (job) =>
+        storagePoolService.createProfile(job, body),
+      ),
+    );
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/storage-pool/connect") {
+    const body = await readJson(request);
+    sendJson(
+      response,
+      202,
+      startJob("storage-pool-connect", (job) =>
+        connectStoragePool(job, body),
+      ),
     );
     return;
   }

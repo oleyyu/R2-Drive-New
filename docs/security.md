@@ -21,6 +21,28 @@
 
 预签名 URL 是 bearer token。项目默认 15 分钟，并且每个 URL 只指向一个对象分片。
 
+## 多账号节点签名
+
+Wrangler-only 的 Storage Node 方案不会创建或收集附加账号的 R2 S3 Secret：
+
+- 本机助手首次连接节点时生成 P-256 密钥对。
+- 私钥通过 stdin 写入主 Worker Secret `STORAGE_FEDERATION_PRIVATE_KEY`，不会进入参数、D1、日志或浏览器存储。
+- 每个节点只取得公钥、自己的 `NODE_ID` 和主网盘 Origin。
+- 主 Worker 的 capability v2 签名绑定节点 ID、HTTP 方法、完整路径、时间戳、随机请求 ID、所有 POST JSON 的 SHA-256 摘要，以及下载请求的实际 `Range`。PUT 大分片不在签名前缓存或摘要整片，授权边界由节点、upload ID、对象 key 和 part number 的完整路径确定，传输内容依赖 HTTPS 完整性。
+- Storage Node 是无状态 Worker，不保存或消费随机请求 ID；同一份完整请求在 60 秒窗口内可以原样重放，`multipart/create` 等操作也可能因此重复执行。随机值只用于区分签名请求，不应被理解为服务端防重放存储；节点入口必须始终使用 HTTPS，调用方也只能把自动重试用于已经实现幂等校验的操作。
+- 节点输入会再次限制对象 key、upload ID、part number、清单大小和批量删除数量。
+- 节点没有登录、目录、D1 或其他 Cloudflare 账号权限，只能操作自己的 `FILES` binding。
+
+管理员页面创建的登记令牌 60 分钟到期、只使用一次，D1 只保存 SHA-256 摘要。这个窗口覆盖 prepare、官方 OAuth/MFA 与多个 Wrangler 阶段；设置页把明文令牌交给本机回环助手后不会写入 localStorage，助手完成节点身份和签名健康检查后才登记。
+
+不同 Cloudflare 登录仍必须由用户在官方 OAuth 页面完成账号密码、MFA 或授权确认。项目不得也不会绕过这一步。
+
+## 主资源归属与防同名误删
+
+安装助手在任何主 R2、D1 或 Worker 写操作前，以 `0600` 权限把随机 installation intent 保存到升级器会保留、Git 会忽略的 `.wrangler/primary-ownership.json`。主桶保存另一份随机 token 标记并记录创建时间；主 Worker 的 Secret `R2_DRIVE_INSTALL_SECRET` 只经 stdin 写入 Cloudflare，卸载时用一次性 challenge 的 HMAC 响应证明线上代码仍是原安装。卸载还要求本机 account、Worker、R2 和 exact D1 `database_id` 全部一致。
+
+R2 桶没有可供 Wrangler 核对的稳定 UUID，因此名称相同不构成所有权证据。标记缺失、创建时间变化、Worker 挑战失败或旧版迁移证据不足时，卸载会在任何云端删除前整体停止；不会现场补写标记、认领同名资源，也不会只删 D1 后丢失恢复依据。旧版自动迁移只有在线 Worker 的 D1/R2 binding 完全匹配，并且 D1 中 ready 文件的 key/size/etag 能与当前桶对象吻合，或空桶创建时间早于 exact D1 创建时间时，才会写入新标记。
+
 ## 响应安全头
 
 Worker 对应用响应添加：
@@ -58,6 +80,7 @@ CSP 的 `connect-src` 只额外允许 R2 S3 域名，以便直传。
 1. D1 导出：用户、目录结构、对象 key、分享和配额
 2. R2 对象：使用另一个桶、账号或外部 S3 兼容存储
 3. Wrangler 配置和 Secret 清单：只备份名称与恢复流程，Secret 进入密码管理器
+4. `.wrangler/storage-pool` 的非 Secret 节点清单和受权限保护的本机 P-256 恢复材料
 
 定期演练“新 Worker + 新 D1 + 恢复 R2 对象”的完整恢复。
 

@@ -24,7 +24,8 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     const db = await ensureDatabase();
     const upload = await db
       .prepare(
-        `SELECT m.upload_id, m.storage_key, m.expected_parts, m.expires_at, f.content_type
+        `SELECT m.upload_id, m.storage_key, m.storage_node_id, m.expected_parts,
+                m.expires_at, f.content_type
          FROM multipart_uploads m JOIN files f ON f.id = m.file_id
          WHERE m.file_id = ? AND m.owner_id = ?`,
       )
@@ -32,12 +33,20 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
       .first<{
         upload_id: string;
         storage_key: string;
+        storage_node_id: string | null;
         expected_parts: number;
         expires_at: string;
         content_type: string | null;
       }>();
     if (!upload || upload.expires_at <= new Date().toISOString()) {
       throw new HttpError(404, "上传任务不存在或已过期。", "upload_not_found");
+    }
+    if (upload.storage_node_id) {
+      throw new HttpError(
+        503,
+        "这个上传任务由远端存储节点代理，不提供 R2 直传签名。",
+        "direct_upload_unavailable",
+      );
     }
     if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > upload.expected_parts) {
       throw new HttpError(400, "分片编号无效。", "invalid_part");

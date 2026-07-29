@@ -2,6 +2,77 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 
+const PRIMARY_WORKER_PROTOCOL = "r2drive-primary-worker-v1";
+const PRIMARY_WORKER_IDENTITY_PATH = "/.well-known/r2-drive/installation";
+const INSTALL_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDENTITY_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+async function primaryWorkerIdentity(
+  request: Request,
+  env: Env,
+  url: URL,
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return new Response(null, {
+      status: 405,
+      headers: { allow: "GET", "cache-control": "no-store" },
+    });
+  }
+  const installId = env.R2_DRIVE_INSTALL_ID;
+  const secret = env.R2_DRIVE_INSTALL_SECRET;
+  const challenge = url.searchParams.get("challenge") ?? "";
+  if (
+    !installId ||
+    !secret ||
+    !INSTALL_ID_PATTERN.test(installId) ||
+    !IDENTITY_TOKEN_PATTERN.test(secret)
+  ) {
+    return Response.json(
+      { ok: false, code: "identity_not_configured" },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
+  if (!IDENTITY_TOKEN_PATTERN.test(challenge)) {
+    return Response.json(
+      { ok: false, code: "invalid_challenge" },
+      { status: 400, headers: { "cache-control": "no-store" } },
+    );
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const message = `${PRIMARY_WORKER_PROTOCOL}\n${installId.toLowerCase()}\n${challenge}`;
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(message),
+  );
+  return Response.json(
+    {
+      ok: true,
+      protocol: PRIMARY_WORKER_PROTOCOL,
+      installId: installId.toLowerCase(),
+      challenge,
+      proof: base64Url(new Uint8Array(signature)),
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
+}
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set
@@ -30,6 +101,12 @@ function secureResponse(response: Response, url: URL): Response {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === PRIMARY_WORKER_IDENTITY_PATH) {
+      return secureResponse(
+        await primaryWorkerIdentity(request, env, url),
+        url,
+      );
+    }
     const shareDownload =
       request.method === "GET" &&
       /^\/api\/public\/shares\/[^/]+\/download$/.test(url.pathname) &&

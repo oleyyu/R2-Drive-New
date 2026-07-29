@@ -2,3 +2,7 @@
 # Create a bucket-scoped R2 API token; never commit the real values.
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
+
+# Optional for local testing of connected Storage Node Workers.
+# The setup helper generates the production P-256 private JWK automatically.
+STORAGE_FEDERATION_PRIVATE_KEY=

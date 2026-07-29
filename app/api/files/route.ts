@@ -224,19 +224,76 @@ export async function POST(request: Request): Promise<Response> {
         )
         .bind(parentId, user.id)
         .first();
-      if (!parent) throw new HttpError(404, "上级文件夹不存在。", "parent_not_found");
+      if (!parent) {
+        throw new HttpError(409, "上级文件夹不存在。", "parent_not_found");
+      }
     }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const normalizedName = name.toLocaleLowerCase();
     try {
-      await db
+      const inserted = await db
         .prepare(
           `INSERT INTO files (
             id, owner_id, parent_id, kind, name, normalized_name, size, status, created_at, updated_at
-          ) VALUES (?, ?, ?, 'folder', ?, ?, 0, 'ready', ?, ?)`,
+          )
+          SELECT ?, ?, ?, 'folder', ?, ?, 0, 'ready', ?, ?
+          WHERE (
+            ? IS NULL
+            OR EXISTS (
+               SELECT 1
+               FROM files
+               WHERE id = ? AND owner_id = ?
+                 AND kind = 'folder' AND status = 'ready'
+            )
+          )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM files sibling
+              WHERE sibling.owner_id = ?
+                AND COALESCE(sibling.parent_id, '') = COALESCE(?, '')
+                AND sibling.normalized_name = ?
+                AND sibling.status != 'deleted'
+            )`,
         )
-        .bind(id, user.id, parentId, name, name.toLocaleLowerCase(), now, now)
+        .bind(
+          id,
+          user.id,
+          parentId,
+          name,
+          normalizedName,
+          now,
+          now,
+          parentId,
+          parentId,
+          user.id,
+          user.id,
+          parentId,
+          normalizedName,
+        )
         .run();
+      if (Number(inserted.meta.changes ?? 0) === 0) {
+        if (parentId) {
+          const currentParent = await db
+            .prepare(
+              "SELECT id FROM files WHERE id = ? AND owner_id = ? AND kind = 'folder' AND status = 'ready'",
+            )
+            .bind(parentId, user.id)
+            .first();
+          if (!currentParent) {
+            throw new HttpError(
+              409,
+              "上级文件夹状态已经变化，请刷新后重试。",
+              "parent_not_found",
+            );
+          }
+        }
+        throw new HttpError(
+          409,
+          "同一位置已有同名项目。",
+          "name_exists",
+        );
+      }
     } catch (error) {
       if (error instanceof Error && error.message.includes("UNIQUE")) {
         throw new HttpError(409, "同一位置已有同名项目。", "name_exists");
