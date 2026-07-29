@@ -1,0 +1,4 @@
+# Optional: only required for browser-to-R2 presigned uploads.
+# Create a bucket-scoped R2 API token; never commit the real values.
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=

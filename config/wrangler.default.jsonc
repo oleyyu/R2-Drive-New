@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "r2-drive",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-05-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "placement": {
+    "mode": "smart"
+  },
+  "vars": {
+    "APP_NAME": "R2 Drive",
+    "APP_ORIGIN": "http://localhost:3000",
+    "REGISTRATION_MODE": "open",
+    "DEFAULT_USER_QUOTA_BYTES": "10000000000",
+    "MAX_FILE_SIZE_BYTES": "5492064911360",
+    "UPLOAD_PART_SIZE_BYTES": "67108864",
+    "UPLOAD_URL_TTL_SECONDS": "900",
+    "PUBLIC_SHARE_CACHE_SECONDS": "0",
+    "UPLOAD_MODE": "auto",
+    "DOWNLOAD_MODE": "proxy",
+    "R2_BUCKET_NAME": "r2-drive-files",
+    "R2_ACCOUNT_ID": "",
+    "BOOTSTRAP_ADMIN_EMAILS": ""
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "r2-drive-db",
+      "migrations_dir": "drizzle"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "r2-drive-files"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
+    }
+  }
+}

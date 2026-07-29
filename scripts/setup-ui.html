@@ -1,0 +1,2709 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="r2-drive-setup-token" content="__SETUP_TOKEN__" />
+    <title>R2 Drive · 本地安装向导</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --blue: #0b8ff4;
+        --blue-hover: #087bd4;
+        --blue-soft: #eaf6ff;
+        --blue-pale: #f4faff;
+        --ink: #182234;
+        --muted: #657288;
+        --soft-muted: #909bb0;
+        --line: #e4e9f0;
+        --line-strong: #d3dbe6;
+        --page: #ffffff;
+        --sidebar: #fcfdff;
+        --soft: #f7f9fc;
+        --good: #158852;
+        --good-soft: #eaf8f1;
+        --bad: #c4453c;
+        --bad-soft: #fff0ee;
+        --radius: 14px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100%;
+        color: var(--ink);
+        background: var(--page);
+      }
+
+      body {
+        min-height: 100dvh;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button,
+      summary {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.56;
+      }
+
+      a {
+        color: var(--blue);
+      }
+
+      :focus-visible {
+        outline: 3px solid rgba(11, 143, 244, 0.24);
+        outline-offset: 2px;
+      }
+
+      .app-shell {
+        min-height: 100dvh;
+        display: grid;
+        grid-template-columns: 72px 264px minmax(0, 1fr);
+      }
+
+      .icon-rail {
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 28px 0 22px;
+        border-right: 1px solid var(--line);
+        background: var(--sidebar);
+      }
+
+      .logo {
+        width: 42px;
+        height: 42px;
+        display: grid;
+        place-items: center;
+        border: 3px solid var(--blue);
+        border-radius: 50%;
+        color: var(--blue);
+        background: white;
+        font-size: 13px;
+        font-weight: 850;
+        letter-spacing: -0.03em;
+      }
+
+      .rail-tools {
+        display: grid;
+        gap: 14px;
+        margin-top: auto;
+      }
+
+      .rail-button {
+        width: 40px;
+        height: 40px;
+        border: 0;
+        border-radius: 12px;
+        color: var(--muted);
+        background: transparent;
+        font-size: 18px;
+        font-weight: 750;
+      }
+
+      .rail-button:hover {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .sidebar {
+        min-height: 100dvh;
+        padding: 30px 20px;
+        border-right: 1px solid var(--line);
+        background: var(--sidebar);
+      }
+
+      .sidebar h1 {
+        margin: 8px 16px 34px;
+        font-size: 22px;
+        letter-spacing: -0.025em;
+      }
+
+      .step-nav {
+        display: grid;
+        gap: 10px;
+      }
+
+      .nav-item {
+        min-height: 64px;
+        display: grid;
+        grid-template-columns: 38px 1fr;
+        align-items: center;
+        gap: 8px;
+        padding: 0 17px;
+        border: 0;
+        border-radius: var(--radius);
+        color: #536077;
+        background: transparent;
+        text-align: left;
+        font-weight: 650;
+      }
+
+      .nav-item:hover {
+        background: var(--soft);
+      }
+
+      .nav-item.active {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .nav-icon {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .workspace {
+        min-width: 0;
+        min-height: 100dvh;
+        display: grid;
+        grid-template-rows: 82px minmax(0, 1fr);
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 0 36px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .toolbar .local-only {
+        margin-left: auto;
+      }
+
+      .button {
+        min-height: 46px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 20px;
+        border: 1px solid var(--blue);
+        border-radius: 10px;
+        color: white;
+        background: var(--blue);
+        font-weight: 720;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: background-color 140ms ease, transform 140ms ease;
+      }
+
+      .button:hover:not(:disabled) {
+        background: var(--blue-hover);
+      }
+
+      .button:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .button.secondary {
+        color: #46536a;
+        border-color: var(--line-strong);
+        background: white;
+      }
+
+      .button.secondary:hover:not(:disabled) {
+        color: var(--blue);
+        border-color: #a9cff0;
+        background: var(--blue-pale);
+      }
+
+      .button.ghost {
+        color: var(--blue);
+        border-color: transparent;
+        background: transparent;
+      }
+
+      .button.large {
+        min-height: 54px;
+        padding: 0 28px;
+        font-size: 16px;
+      }
+
+      .button.external::after,
+      .text-link.external::after {
+        content: "↗";
+        margin-left: 6px;
+      }
+
+      .local-only {
+        min-height: 42px;
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--muted);
+        background: white;
+        font-size: 13px;
+      }
+
+      .shield {
+        color: var(--good);
+        font-weight: 900;
+      }
+
+      .content {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .step-page {
+        min-height: calc(100dvh - 82px);
+        display: none;
+        grid-template-rows: minmax(0, 1fr) auto;
+      }
+
+      .step-page.active {
+        display: grid;
+      }
+
+      .page-body {
+        width: min(1050px, calc(100% - 72px));
+        margin: 0 auto;
+        padding: 34px 0 42px;
+      }
+
+      .page-heading {
+        margin-bottom: 26px;
+      }
+
+      .page-heading h2 {
+        margin: 0;
+        font-size: clamp(26px, 3vw, 34px);
+        line-height: 1.2;
+        letter-spacing: -0.035em;
+      }
+
+      .page-heading p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .choice-sheet {
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+
+      .choice-row {
+        min-height: 112px;
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) minmax(280px, 0.8fr) minmax(190px, 0.7fr);
+        align-items: center;
+        gap: 22px;
+        padding: 20px 26px;
+      }
+
+      .choice-row + .choice-row {
+        border-top: 1px solid var(--line);
+      }
+
+      .choice-title {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        font-size: 18px;
+        font-weight: 720;
+      }
+
+      .choice-mark {
+        width: 50px;
+        height: 50px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        color: var(--blue);
+        background: var(--blue-pale);
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .choice-button {
+        min-height: 48px;
+        border: 0;
+        color: #5c687d;
+        background: white;
+      }
+
+      .choice-button + .choice-button {
+        border-left: 1px solid var(--line-strong);
+      }
+
+      .choice-button.selected {
+        color: white;
+        background: var(--blue);
+      }
+
+      .text-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 42px;
+        color: var(--blue);
+        font-size: 14px;
+        text-decoration: none;
+      }
+
+      .text-link:hover {
+        text-decoration: underline;
+      }
+
+      .guide,
+      .info-strip,
+      .inline-state,
+      .domain-help {
+        border-radius: var(--radius);
+        background: var(--blue-pale);
+      }
+
+      .guide {
+        margin-top: 22px;
+        padding: 24px;
+      }
+
+      .guide h3 {
+        margin: 0;
+        color: #245680;
+        font-size: 16px;
+      }
+
+      .guide > p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .guide-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 22px;
+      }
+
+      .guide-step {
+        min-width: 0;
+      }
+
+      .guide-number {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 12px;
+        border: 1px solid #9dccf4;
+        border-radius: 50%;
+        color: var(--blue);
+        background: white;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .guide-step strong {
+        display: block;
+        font-size: 14px;
+      }
+
+      .guide-step span {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .guide-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 22px;
+      }
+
+      .inline-state {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 18px;
+        padding: 16px 18px;
+      }
+
+      .inline-state p {
+        flex: 1;
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .inline-state strong {
+        color: var(--ink);
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 38px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        color: var(--muted);
+        background: var(--soft);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .status.ok {
+        color: var(--good);
+        background: var(--good-soft);
+      }
+
+      .status.bad {
+        color: var(--bad);
+        background: var(--bad-soft);
+      }
+
+      .status.busy {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .page-footer {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
+        min-height: 94px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 18px max(36px, calc((100% - 1050px) / 2));
+        border-top: 1px solid var(--line);
+        background: white;
+      }
+
+      .progress {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-left: auto;
+        color: var(--blue);
+        font-size: 13px;
+        font-weight: 680;
+      }
+
+      .progress-dots {
+        display: flex;
+        align-items: center;
+      }
+
+      .progress-dot {
+        width: 12px;
+        height: 12px;
+        border: 2px solid var(--line-strong);
+        border-radius: 50%;
+        background: white;
+      }
+
+      .progress-dot.active {
+        border-color: var(--blue);
+        background: var(--blue);
+      }
+
+      .progress-line {
+        width: 46px;
+        height: 1px;
+        background: var(--line-strong);
+      }
+
+      form {
+        margin: 0;
+      }
+
+      .form-stack {
+        width: min(760px, 100%);
+        display: grid;
+        gap: 24px;
+      }
+
+      label,
+      .field {
+        display: grid;
+        gap: 9px;
+      }
+
+      label > span,
+      .field > span {
+        font-size: 15px;
+        font-weight: 680;
+      }
+
+      label small,
+      .field small {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .bucket-create {
+        width: min(760px, 100%);
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        border: 1px solid #c5e3fb;
+        border-radius: 12px;
+        background: var(--blue-pale);
+      }
+
+      .bucket-create-copy {
+        flex: 1;
+        min-width: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .bucket-create-copy strong {
+        display: block;
+        margin-bottom: 2px;
+        color: #245680;
+        font-size: 13px;
+      }
+
+      .button.compact {
+        min-height: 42px;
+        padding-inline: 16px;
+        font-size: 13px;
+      }
+
+      input,
+      select {
+        width: 100%;
+        min-height: 52px;
+        padding: 10px 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        color: var(--ink);
+        background: white;
+      }
+
+      input::placeholder {
+        color: var(--soft-muted);
+      }
+
+      input:focus,
+      select:focus {
+        border-color: var(--blue);
+        outline: 3px solid rgba(11, 143, 244, 0.12);
+      }
+
+      .info-strip {
+        width: min(900px, 100%);
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        margin-top: 28px;
+        padding: 18px 20px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .info-strip strong {
+        color: #385b7a;
+      }
+
+      .info-items {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px 24px;
+      }
+
+      .info-item::before {
+        content: "✓";
+        display: inline-grid;
+        width: 19px;
+        height: 19px;
+        place-items: center;
+        margin-right: 7px;
+        border-radius: 50%;
+        color: white;
+        background: var(--blue);
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      details.advanced {
+        width: min(760px, 100%);
+        margin-top: 24px;
+        border-top: 1px solid var(--line);
+      }
+
+      details.advanced summary {
+        padding: 18px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 680;
+      }
+
+      .advanced-body {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        padding-top: 18px;
+      }
+
+      .ready-stage {
+        width: min(900px, 100%);
+        margin: 12px auto 0;
+        text-align: center;
+      }
+
+      .folder-picture {
+        position: relative;
+        width: 230px;
+        height: 150px;
+        margin: 14px auto 30px;
+      }
+
+      .folder-back,
+      .folder-front {
+        position: absolute;
+        border: 3px solid var(--blue);
+        border-radius: 13px;
+        background: white;
+      }
+
+      .folder-back {
+        width: 175px;
+        height: 112px;
+        top: 12px;
+        left: 42px;
+        background: var(--blue-pale);
+      }
+
+      .folder-front {
+        width: 205px;
+        height: 120px;
+        top: 38px;
+        left: 8px;
+        transform: skewX(7deg);
+      }
+
+      .folder-front::after {
+        content: "R2";
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: var(--blue);
+        font-size: 28px;
+        font-weight: 850;
+        transform: skewX(-7deg);
+      }
+
+      .assurances {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 18px 42px;
+        margin: 0 0 28px;
+        color: #435067;
+        font-size: 14px;
+      }
+
+      .assurances span::before {
+        content: "✓";
+        display: inline-grid;
+        width: 22px;
+        height: 22px;
+        place-items: center;
+        margin-right: 8px;
+        border-radius: 50%;
+        color: white;
+        background: var(--blue);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .local-launch-actions {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .launch-progress {
+        width: min(760px, 100%);
+        display: grid;
+        gap: 10px;
+        margin: 18px auto 0;
+        padding: 16px 18px;
+        border: 1px solid #c5e3fb;
+        border-radius: 12px;
+        background: var(--blue-pale);
+        text-align: left;
+      }
+
+      .launch-progress-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        color: #245680;
+        font-size: 13px;
+        font-weight: 720;
+      }
+
+      .launch-progress-track {
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #dcebf7;
+      }
+
+      .launch-progress-bar {
+        display: block;
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--blue);
+        transition: width 220ms ease;
+      }
+
+      .launch-progress.error {
+        border-color: #f3c8c8;
+        background: var(--bad-soft);
+      }
+
+      .launch-progress.error .launch-progress-head {
+        color: var(--bad);
+      }
+
+      .launch-progress.error .launch-progress-bar {
+        background: var(--bad);
+      }
+
+      .launch-stages {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        color: var(--soft-muted);
+        font-size: 11px;
+      }
+
+      .launch-stage {
+        min-width: 0;
+      }
+
+      .launch-stage::before {
+        content: "";
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        margin-right: 6px;
+        border: 1px solid var(--line-strong);
+        border-radius: 50%;
+        background: white;
+      }
+
+      .launch-stage.active {
+        color: var(--blue);
+        font-weight: 720;
+      }
+
+      .launch-stage.active::before,
+      .launch-stage.done::before {
+        border-color: var(--blue);
+        background: var(--blue);
+      }
+
+      .launch-help {
+        width: min(760px, 100%);
+        margin: 10px auto 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .secret-area {
+        width: min(760px, 100%);
+        margin: 22px auto 0;
+        text-align: left;
+      }
+
+      .domain-choice {
+        width: min(760px, 100%);
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding: 10px 16px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+      }
+
+      .domain-choice strong {
+        display: block;
+        font-size: 14px;
+      }
+
+      .domain-choice small {
+        display: block;
+        margin-top: 5px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .domain-choice .button {
+        justify-self: end;
+      }
+
+      .domain-help {
+        width: min(900px, 100%);
+        margin-top: 22px;
+        border: 1px solid var(--line-strong);
+        background: white;
+        overflow: hidden;
+      }
+
+      .domain-help summary {
+        padding: 16px 18px;
+        color: #4f5c72;
+        font-size: 14px;
+      }
+
+      .domain-help-body {
+        padding: 0 18px 18px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .domain-help-body ol {
+        margin: 14px 0;
+        padding-left: 20px;
+      }
+
+      .manual-warning {
+        margin-top: 14px;
+        padding: 14px;
+        border-radius: 10px;
+        color: var(--bad);
+        background: var(--bad-soft);
+      }
+
+      .local-finish {
+        width: min(760px, 100%);
+        padding: 22px;
+        border-radius: var(--radius);
+        color: var(--muted);
+        background: var(--blue-pale);
+        line-height: 1.65;
+      }
+
+      .local-finish strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--ink);
+      }
+
+      dialog {
+        width: min(820px, calc(100% - 28px));
+        max-height: min(720px, calc(100dvh - 28px));
+        padding: 0;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        color: var(--ink);
+        background: white;
+        box-shadow: 0 24px 80px rgba(31, 56, 82, 0.2);
+      }
+
+      dialog::backdrop {
+        background: rgba(31, 48, 70, 0.24);
+        backdrop-filter: blur(3px);
+      }
+
+      .dialog-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .dialog-head h3 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .dialog-body {
+        padding: 20px;
+      }
+
+      .logs {
+        min-height: 260px;
+        max-height: 500px;
+        overflow: auto;
+        margin: 0;
+        padding: 16px;
+        border-radius: 10px;
+        color: #dbeef8;
+        background: #162631;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      @media (max-width: 920px) {
+        .app-shell {
+          grid-template-columns: 68px minmax(0, 1fr);
+        }
+
+        .sidebar {
+          grid-column: 2;
+          min-height: auto;
+          display: flex;
+          align-items: center;
+          gap: 18px;
+          padding: 12px 18px;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .sidebar h1 {
+          margin: 0;
+          white-space: nowrap;
+          font-size: 18px;
+        }
+
+        .step-nav {
+          display: flex;
+          min-width: 0;
+          overflow-x: auto;
+        }
+
+        .nav-item {
+          min-height: 46px;
+          grid-template-columns: 1fr;
+          padding: 0 14px;
+          white-space: nowrap;
+        }
+
+        .nav-icon {
+          display: none;
+        }
+
+        .icon-rail {
+          grid-row: 1 / span 2;
+        }
+
+        .workspace {
+          grid-column: 2;
+          min-height: calc(100dvh - 71px);
+        }
+
+        .choice-row {
+          grid-template-columns: 1fr;
+          gap: 14px;
+        }
+
+        .guide-steps {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .page-footer {
+          flex-wrap: wrap;
+          padding-inline: 24px;
+        }
+
+        .progress {
+          width: 100%;
+          justify-content: space-between;
+          order: -1;
+          margin-left: 0;
+        }
+      }
+
+      @media (max-width: 650px) {
+        .app-shell {
+          display: block;
+        }
+
+        .icon-rail {
+          display: none;
+        }
+
+        .sidebar {
+          display: block;
+          padding: 12px;
+        }
+
+        .sidebar h1 {
+          margin: 2px 6px 10px;
+        }
+
+        .nav-item {
+          padding: 0 12px;
+          font-size: 13px;
+        }
+
+        .toolbar {
+          margin: 0 12px;
+          gap: 8px;
+        }
+
+        .toolbar .button.secondary {
+          display: none;
+        }
+
+        .toolbar .local-only {
+          display: none;
+        }
+
+        .page-body {
+          width: calc(100% - 28px);
+          padding-top: 28px;
+        }
+
+        .page-footer {
+          position: static;
+          flex-wrap: wrap;
+          padding: 16px;
+        }
+
+        .progress {
+          width: 100%;
+          justify-content: space-between;
+          order: -1;
+          margin: 0 0 6px;
+        }
+
+        .progress-line {
+          width: 28px;
+        }
+
+        .guide-steps,
+        .advanced-body {
+          grid-template-columns: 1fr;
+        }
+
+        .inline-state,
+        .info-strip,
+        .bucket-create {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .bucket-create .button {
+          width: 100%;
+        }
+
+        .launch-stages {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .local-launch-actions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .local-launch-actions .button,
+        .local-launch-actions .text-link {
+          width: 100%;
+        }
+
+        .domain-choice {
+          grid-template-columns: 1fr;
+        }
+
+        .domain-choice .button {
+          width: 100%;
+          justify-self: stretch;
+        }
+
+        .button.large {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .button {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="icon-rail" aria-label="安装助手工具栏">
+        <div class="logo" aria-label="R2 Drive">R2</div>
+        <div class="rail-tools">
+          <button class="rail-button" id="help-rail" type="button" title="查看帮助">?</button>
+          <button class="rail-button" id="log-open" type="button" title="查看处理日志">≡</button>
+        </div>
+      </aside>
+
+      <aside class="sidebar">
+        <h1>安装助手</h1>
+        <nav class="step-nav" aria-label="安装步骤">
+          <button class="nav-item active" type="button" data-step="0">
+            <span class="nav-icon">CF</span>
+            <span>准备账号</span>
+          </button>
+          <button class="nav-item" type="button" data-step="1">
+            <span class="nav-icon">R2</span>
+            <span>连接存储</span>
+          </button>
+          <button class="nav-item" type="button" data-step="2">
+            <span class="nav-icon">开</span>
+            <span>打开网盘</span>
+          </button>
+          <button class="nav-item" type="button" data-step="3">
+            <span class="nav-icon">域</span>
+            <span>域名发布</span>
+          </button>
+        </nav>
+      </aside>
+
+      <section class="workspace">
+        <header class="toolbar">
+          <button class="button" id="top-next" type="button">继续设置　›</button>
+          <button class="button secondary" id="help-top" type="button">查看帮助</button>
+          <button class="button secondary" id="check-environment" type="button">检查环境</button>
+          <span class="local-only"><span class="shield">✓</span>只在本机运行</span>
+        </header>
+
+        <main class="content">
+          <section class="step-page active" data-page="0">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>先确认你有什么</h2>
+                <p>按真实情况选择，后面的步骤会自动变化。</p>
+              </header>
+
+              <div class="choice-sheet">
+                <div class="choice-row">
+                  <div class="choice-title">
+                    <span class="choice-mark">CF</span>
+                    <span>我有 Cloudflare 账号</span>
+                  </div>
+                  <div class="segmented" aria-label="是否有 Cloudflare 账号">
+                    <button
+                      class="choice-button"
+                      type="button"
+                      data-choice-group="cloudflare"
+                      data-choice-value="yes"
+                      aria-pressed="false"
+                    >
+                      有账号
+                    </button>
+                    <button
+                      class="choice-button"
+                      type="button"
+                      data-choice-group="cloudflare"
+                      data-choice-value="no"
+                      aria-pressed="false"
+                    >
+                      没有账号
+                    </button>
+                  </div>
+                  <a
+                    class="text-link external"
+                    href="https://dash.cloudflare.com/sign-up"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    免费注册 Cloudflare
+                  </a>
+                </div>
+
+                <div class="choice-row">
+                  <div class="choice-title">
+                    <span class="choice-mark">R2</span>
+                    <span>我有 R2 存储桶</span>
+                  </div>
+                  <div class="segmented" aria-label="是否已经创建 R2 存储桶">
+                    <button
+                      class="choice-button"
+                      type="button"
+                      data-choice-group="r2"
+                      data-choice-value="yes"
+                      aria-pressed="false"
+                    >
+                      已经创建
+                    </button>
+                    <button
+                      class="choice-button"
+                      type="button"
+                      data-choice-group="r2"
+                      data-choice-value="no"
+                      aria-pressed="false"
+                    >
+                      还没有
+                    </button>
+                  </div>
+                  <a
+                    class="text-link external"
+                    href="https://dash.cloudflare.com/?to=/:account/r2"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    打开 R2 控制台
+                  </a>
+                </div>
+              </div>
+
+              <div class="guide hidden" id="cloudflare-guide">
+                <h3>还没有 Cloudflare 账号</h3>
+                <p>注册免费账号并验证邮箱。完成后回到这里，选择“有账号”。</p>
+                <div class="guide-actions">
+                  <a
+                    class="button external"
+                    href="https://dash.cloudflare.com/sign-up"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    打开官方注册页
+                  </a>
+                </div>
+              </div>
+
+              <div class="inline-state hidden" id="account-connect">
+                <p>
+                  <strong id="account-title">连接这台电脑上的 Cloudflare</strong><br />
+                  <span id="account-copy">授权会在 Cloudflare 官方页面完成，安装助手看不到密码。</span>
+                </p>
+                <label class="field hidden" id="account-choice-wrap" for="account-choice">
+                  <span>选择账号</span>
+                  <select id="account-choice"></select>
+                </label>
+                <button class="button" id="check-account" type="button">连接账号</button>
+                <button class="button secondary hidden" id="login-account" type="button">
+                  打开官方授权
+                </button>
+                <span class="status" id="account-status" role="status">等待连接</span>
+              </div>
+
+              <div class="guide hidden" id="account-plan-card">
+                <h3 id="account-plan-title">正在识别 Cloudflare 套餐</h3>
+                <p id="account-plan-copy"></p>
+                <div class="guide-actions">
+                  <a
+                    class="button secondary external"
+                    href="https://developers.cloudflare.com/r2/pricing/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    查看 R2 官方额度
+                  </a>
+                  <a
+                    class="text-link external"
+                    href="https://dash.cloudflare.com/?to=/:account/billing"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    查看账号账单
+                  </a>
+                </div>
+              </div>
+
+              <div class="guide hidden" id="r2-guide">
+                <h3>没有 R2？下一页可以一键创建</h3>
+                <p>
+                  先连接 Cloudflare 账号，然后进入下一页填写一个名称。安装助手可以直接在你的账号中创建私人存储桶。
+                </p>
+                <div class="guide-steps">
+                  <div class="guide-step">
+                    <span class="guide-number">1</span>
+                    <strong>连接账号</strong>
+                    <span>授权只在 Cloudflare 官方页面完成。</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-number">2</span>
+                    <strong>填写名称</strong>
+                    <span>使用小写字母、数字和连字符。</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-number">3</span>
+                    <strong>一键创建</strong>
+                    <span>助手会创建私人 R2 桶并选择 APAC 位置提示。</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-number">4</span>
+                    <strong>继续连接</strong>
+                    <span>创建完成后继续准备资料数据库和上传优化。</span>
+                  </div>
+                </div>
+                <div class="guide-actions">
+                  <a
+                    class="button external"
+                    href="https://dash.cloudflare.com/?to=/:account/r2"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    想手动创建？打开 R2 控制台
+                  </a>
+                  <a
+                    class="button secondary external"
+                    href="https://developers.cloudflare.com/r2/buckets/create-buckets/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    查看官方图文说明
+                  </a>
+                  <button class="button secondary" id="r2-created" type="button">
+                    我已经有存储桶
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large" id="ready-next" type="button">我准备好了，下一步　›</button>
+              <span class="status" id="ready-status" role="status">请选择上面的真实情况</span>
+              <div class="progress" aria-label="账号准备">
+                <span>账号准备</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot active"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
+
+          <section class="step-page" data-page="1">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>连接你的 R2 存储桶</h2>
+                <p>只需要填写存储桶名称，其余设置由安装助手完成。</p>
+              </header>
+
+              <form id="resource-form">
+                <div class="form-stack">
+                  <label for="app-name">
+                    <span>网盘名称</span>
+                    <input
+                      id="app-name"
+                      name="appName"
+                      maxlength="60"
+                      value="我的网盘"
+                      autocomplete="off"
+                      required
+                    />
+                  </label>
+
+                  <div class="field">
+                    <label for="r2-name">
+                      <span>R2 存储桶名称</span>
+                      <input
+                        id="r2-name"
+                        name="r2Name"
+                        placeholder="例如 my-r2-drive"
+                        autocomplete="off"
+                        minlength="3"
+                        maxlength="63"
+                        pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+                        required
+                      />
+                    </label>
+                    <small>
+                      已经有存储桶？
+                      <a
+                        href="https://dash.cloudflare.com/?to=/:account/r2"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        打开 R2 控制台查看
+                      </a>
+                    </small>
+                    <div class="bucket-create">
+                      <div class="bucket-create-copy">
+                        <strong>还没有存储桶？</strong>
+                        将在当前选择的 Cloudflare 账号中创建私人存储桶，位置提示使用 APAC。
+                      </div>
+                      <button class="button compact" id="create-r2" type="button">
+                        一键创建 R2 桶（网盘）
+                      </button>
+                      <span class="status" id="r2-create-status" role="status">等待创建</span>
+                    </div>
+                  </div>
+                </div>
+
+                <input id="account-id" name="accountId" type="hidden" />
+
+                <div class="info-strip">
+                  <strong>安装助手将自动完成：</strong>
+                  <div class="info-items">
+                    <span class="info-item">查找或创建资料数据库</span>
+                    <span class="info-item">开启上传优化</span>
+                    <span class="info-item">关闭其他人注册</span>
+                  </div>
+                </div>
+
+                <details class="advanced">
+                  <summary>高级设置（一般不需要打开）</summary>
+                  <div class="advanced-body">
+                    <label for="worker-name">
+                      <span>服务名称</span>
+                      <input id="worker-name" name="workerName" value="r2-drive" required />
+                    </label>
+                    <label for="d1-name">
+                      <span>资料数据库名称</span>
+                      <input id="d1-name" name="d1Name" value="r2-drive-db" required />
+                    </label>
+                    <label for="d1-mode">
+                      <span>资料数据库</span>
+                      <select id="d1-mode" name="d1Mode">
+                        <option value="create">自动查找或创建（推荐）</option>
+                        <option value="existing">使用已有</option>
+                      </select>
+                    </label>
+                    <label id="d1-id-wrap" class="hidden" for="d1-id">
+                      <span>已有数据库编号</span>
+                      <input id="d1-id" name="d1Id" autocomplete="off" />
+                    </label>
+                    <label for="quota-gb">
+                      <span>网盘容量上限（GB）</span>
+                      <input
+                        id="quota-gb"
+                        name="quotaGB"
+                        type="number"
+                        min="1"
+                        max="1000000"
+                        value="10"
+                        required
+                      />
+                      <small>默认 10 GB，对齐 R2 Standard 每月 10 GB-month 免费存储层。</small>
+                    </label>
+                    <label for="share-cache">
+                      <span>分享下载缓存（秒）</span>
+                      <input
+                        id="share-cache"
+                        name="publicShareCacheSeconds"
+                        type="number"
+                        min="0"
+                        max="604800"
+                        value="3600"
+                        required
+                      />
+                    </label>
+                  </div>
+                </details>
+              </form>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large" id="connect-storage" type="button">
+                检查并连接存储　›
+              </button>
+              <button class="button secondary" type="button" data-back="0">返回</button>
+              <span class="status" id="storage-status" role="status">等待连接</span>
+              <div class="progress" aria-label="连接存储">
+                <span>连接存储</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot active"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
+
+          <section class="step-page" data-page="2">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>选择网盘打开方式</h2>
+                <p>有自己的域名就先发布域名，只需在域名网盘设置一次主人账号和密码。</p>
+              </header>
+
+              <div class="ready-stage">
+                <div class="folder-picture" aria-hidden="true">
+                  <div class="folder-back"></div>
+                  <div class="folder-front"></div>
+                </div>
+                <div class="assurances">
+                  <span>只有主人能注册</span>
+                  <span>域名版可创建分享</span>
+                  <span>绑定后只打开域名版</span>
+                </div>
+                <div class="local-launch-actions">
+                  <button class="button secondary" id="start-local" type="button">
+                    没有域名：打开本机版
+                  </button>
+                  <a
+                    class="button secondary hidden"
+                    id="open-local"
+                    href="http://localhost:3000/start"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    再次打开网盘 ↗
+                  </a>
+                  <span class="status" id="local-status" role="status">等待启动</span>
+                </div>
+                <div class="launch-progress" id="local-progress" aria-live="polite">
+                  <div class="launch-progress-head">
+                    <span id="local-progress-message">点击上方按钮开始</span>
+                    <span id="local-progress-percent">0%</span>
+                  </div>
+                  <div
+                    class="launch-progress-track"
+                    role="progressbar"
+                    aria-label="本地网盘启动进度"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow="0"
+                    id="local-progress-track"
+                  >
+                    <i class="launch-progress-bar" id="local-progress-bar"></i>
+                  </div>
+                  <div class="launch-stages" aria-hidden="true">
+                    <span class="launch-stage" data-local-stage="starting">启动服务</span>
+                    <span class="launch-stage" data-local-stage="compiling">编译页面</span>
+                    <span class="launch-stage" data-local-stage="verifying">检查账号页</span>
+                    <span class="launch-stage" data-local-stage="ready">打开网盘</span>
+                  </div>
+                </div>
+                <p class="launch-help hidden" id="local-help">
+                  点击“重新启动网盘”时会自动关闭可确认属于本项目的旧进程；其他软件不会被强制关闭。
+                  <button class="button ghost compact" id="local-log-open" type="button">
+                    查看错误详情
+                  </button>
+                </p>
+
+                <details class="advanced secret-area">
+                  <summary>保存大文件直传凭据（可选）</summary>
+                  <form id="local-secrets-form" class="advanced-body">
+                    <label for="local-access-key">
+                      <span>Access Key ID</span>
+                      <input
+                        id="local-access-key"
+                        name="accessKeyId"
+                        type="password"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label for="local-secret-key">
+                      <span>Secret Access Key</span>
+                      <input
+                        id="local-secret-key"
+                        name="secretAccessKey"
+                        type="password"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <button class="button secondary" type="submit">保存在本机</button>
+                    <span class="status" id="secret-status" role="status">尚未保存</span>
+                  </form>
+                </details>
+              </div>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large" id="domain-next" type="button">
+                有域名：先发布域名　›
+              </button>
+              <button class="button secondary" type="button" data-back="1">返回</button>
+              <div class="progress" aria-label="打开网盘">
+                <span>打开网盘</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot active"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
+
+          <section class="step-page" data-page="3">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>自动识别并发布域名</h2>
+                <p>从当前 Cloudflare 账号查找有效域名，自动生成网盘地址并完成绑定。</p>
+              </header>
+
+              <div class="domain-choice">
+                <div>
+                  <strong>自动查找 Cloudflare 域名</strong>
+                  <small id="domain-detect-copy">进入本页后自动识别，不需要手动填写。</small>
+                </div>
+                <button class="button secondary" id="detect-domains" type="button">
+                  重新识别域名
+                </button>
+              </div>
+
+              <form id="publish-form" class="hidden">
+                <div class="form-stack">
+                  <label for="zone-choice">
+                    <span>用于网盘的根域名</span>
+                    <select id="zone-choice" name="zoneName" required></select>
+                    <small id="zone-summary">安装助手会自动选择一个有效域名。</small>
+                  </label>
+                  <label for="custom-hostname">
+                    <span>自动生成的网盘地址</span>
+                    <input
+                      id="custom-hostname"
+                      name="customHostname"
+                      placeholder="drive.example.com"
+                      inputmode="url"
+                      autocomplete="off"
+                      readonly
+                      required
+                    />
+                    <small>
+                      无需手动创建 DNS 记录；Cloudflare 会在发布时自动添加并配置 HTTPS。
+                    </small>
+                  </label>
+                </div>
+
+                <details class="advanced">
+                  <summary>开发者设置：修改子域名前缀</summary>
+                  <div class="advanced-body">
+                    <label for="domain-prefix">
+                      <span>子域名前缀</span>
+                      <input
+                        id="domain-prefix"
+                        value="drive"
+                        placeholder="drive"
+                        pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                        autocomplete="off"
+                      />
+                      <small>默认是 drive；留空会使用根域名，不建议小白修改。</small>
+                    </label>
+                  </div>
+                </details>
+
+                <div class="info-strip">
+                  <strong>安装助手将自动完成：</strong>
+                  <div class="info-items">
+                    <span class="info-item">关闭 workers.dev</span>
+                    <span class="info-item">自动创建 DNS</span>
+                    <span class="info-item">自动配置 HTTPS</span>
+                  </div>
+                </div>
+
+                <details class="domain-help" id="domain-help">
+                  <summary>自动绑定失败时怎么办</summary>
+                  <div class="domain-help-body">
+                    <ol>
+                      <li>先看下方的真实错误和“查看处理日志”，不要直接修改 DNS。</li>
+                      <li>只有日志明确提示同名 CNAME 冲突时，才删除该子域名原有的 CNAME。</li>
+                      <li>处理对应问题后，回到这里重新点击“发布并绑定域名”。</li>
+                    </ol>
+                    <a
+                      class="text-link external"
+                      href="https://dash.cloudflare.com/?to=/:account/workers-and-pages"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      打开 Workers 域名设置
+                    </a>
+                    <a
+                      class="text-link external"
+                      href="https://developers.cloudflare.com/workers/configuration/routing/custom-domains/"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      查看官方绑定说明
+                    </a>
+                    <div class="manual-warning hidden" id="domain-error-help">
+                      自动绑定没有完成。请按上面的三项检查，然后重新发布。
+                    </div>
+                  </div>
+                </details>
+
+                <details class="advanced">
+                  <summary>发布后启用大文件直传（可选）</summary>
+                  <div class="advanced-body">
+                    <label for="deploy-access-key">
+                      <span>Access Key ID</span>
+                      <input
+                        id="deploy-access-key"
+                        name="accessKeyId"
+                        type="password"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label for="deploy-secret-key">
+                      <span>Secret Access Key</span>
+                      <input
+                        id="deploy-secret-key"
+                        name="secretAccessKey"
+                        type="password"
+                        autocomplete="off"
+                      />
+                    </label>
+                  </div>
+                </details>
+              </form>
+
+              <div class="guide hidden" id="domain-empty">
+                <h3>当前账号还没有可用域名</h3>
+                <p>先把自己的域名添加到 Cloudflare；状态变成 Active 后，回到这里点击“重新识别域名”。</p>
+                <div class="guide-actions">
+                  <a
+                    class="button external"
+                    href="https://dash.cloudflare.com/?to=/:account/add-site"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    打开 Cloudflare 添加域名
+                  </a>
+                </div>
+              </div>
+
+              <div class="local-finish hidden" id="local-finish">
+                <strong>可以先只在本机使用</strong>
+                以后有自己的域名时，再次双击启动器，打开“域名发布”即可。不会影响已经存进 R2 的文件。
+              </div>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large hidden" id="publish-drive" type="button">
+                一键发布并自动绑定　›
+              </button>
+              <button class="button secondary" id="local-only-finish" type="button">
+                暂时只在本机用
+              </button>
+              <a
+                class="button hidden"
+                id="open-production"
+                href="#"
+                target="_blank"
+                rel="noreferrer"
+              >
+                打开线上网盘
+              </a>
+              <span class="status" id="publish-status" role="status">正在等待自动识别</span>
+              <div class="progress" aria-label="域名发布">
+                <span>域名发布</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot active"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <dialog id="log-dialog">
+      <div class="dialog-head">
+        <h3>处理日志</h3>
+        <button class="button secondary" id="log-close" type="button">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <pre class="logs" id="job-log" aria-live="polite">还没有运行任务。</pre>
+      </div>
+    </dialog>
+
+    <script>
+      const token = document
+        .querySelector('meta[name="r2-drive-setup-token"]')
+        .getAttribute("content");
+      const byId = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const allButtons = Array.from(document.querySelectorAll("button"));
+      const navButtons = Array.from(document.querySelectorAll("[data-step]"));
+      const pages = Array.from(document.querySelectorAll("[data-page]"));
+      const requestedStep = new URLSearchParams(window.location.search).get("step");
+
+      const state = {
+        activeStep: 0,
+        cloudflareChoice: null,
+        r2Choice: null,
+        domainChoice: null,
+        accountConnected: false,
+        resourcesReady: false,
+        domainLookupStarted: false,
+        accounts: [],
+        zones: [],
+        configuredHostname: "",
+      };
+
+      const helpUrls = [
+        "https://developers.cloudflare.com/fundamentals/setup/account/",
+        "https://developers.cloudflare.com/r2/buckets/create-buckets/",
+        "https://developers.cloudflare.com/workers/development-testing/",
+        "https://developers.cloudflare.com/workers/configuration/routing/custom-domains/",
+      ];
+
+      function setBusy(busy) {
+        for (const button of allButtons) button.disabled = busy;
+      }
+
+      function setStatus(element, kind, message) {
+        element.className = `status${kind ? ` ${kind}` : ""}`;
+        element.textContent = message;
+      }
+
+      function useProductionHostname(hostname) {
+        if (!hostname) return;
+        const url = `https://${hostname}/start`;
+        state.configuredHostname = hostname;
+        byId("custom-hostname").value = hostname;
+        byId("start-local").dataset.productionUrl = url;
+        byId("start-local").textContent = "打开域名网盘　›";
+        byId("open-local").href = url;
+        byId("open-local").textContent = "再次打开域名网盘 ↗";
+        byId("open-local").classList.remove("hidden");
+        setStatus(byId("local-status"), "ok", "以后只打开这一份域名网盘");
+        renderLocalProgress({
+          percent: 100,
+          stage: "ready",
+          message: "域名网盘已经准备好",
+        });
+      }
+
+      const localStageOrder = ["starting", "compiling", "verifying", "ready"];
+
+      function renderLocalProgress(progress, errorMessage = "") {
+        const value = progress || {
+          percent: 0,
+          stage: "starting",
+          message: "点击上方按钮开始",
+        };
+        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
+        const isError = value.stage === "error" || Boolean(errorMessage);
+        const message = errorMessage || value.message || "正在准备";
+        const progressBox = byId("local-progress");
+        progressBox.classList.toggle("error", isError);
+        byId("local-progress-message").textContent = message;
+        byId("local-progress-percent").textContent = `${Math.round(percent)}%`;
+        byId("local-progress-bar").style.width = `${percent}%`;
+        byId("local-progress-track").setAttribute("aria-valuenow", String(Math.round(percent)));
+
+        let activeIndex = localStageOrder.indexOf(value.stage);
+        if (value.stage === "checking" || value.stage === "stopping") activeIndex = 0;
+        if (isError) {
+          activeIndex = percent >= 80 ? 2 : percent >= 40 ? 1 : 0;
+        }
+        for (const stage of document.querySelectorAll("[data-local-stage]")) {
+          const index = localStageOrder.indexOf(stage.dataset.localStage);
+          stage.classList.toggle("done", !isError && index < activeIndex);
+          stage.classList.toggle("active", index === activeIndex);
+        }
+
+        byId("local-help").classList.toggle("hidden", !isError);
+        if (byId("start-local").dataset.productionUrl) {
+          byId("start-local").textContent = "打开域名网盘　›";
+          return;
+        }
+        byId("start-local").textContent = isError
+          ? "重新启动网盘　›"
+          : value.stage === "stopping"
+            ? "正在关闭旧网盘"
+            : percent > 0 && percent < 100
+              ? "正在启动网盘"
+              : "启动并打开网盘　›";
+      }
+
+      function createLaunchWindow() {
+        const popup = window.open("", "_blank");
+        if (!popup) return null;
+        popup.document.open();
+        popup.document.write(`<!doctype html>
+          <html lang="zh-CN">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>R2 Drive 正在启动</title>
+              <style>
+                * { box-sizing: border-box; }
+                body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+                  color: #182235; background: #f7fbff; font-family: system-ui, sans-serif; }
+                main { width: min(520px, 100%); padding: 32px; border: 1px solid #d7e7f4;
+                  border-radius: 16px; background: white; box-shadow: 0 18px 60px rgba(47, 93, 130, .12); }
+                h1 { margin: 0 0 10px; font-size: 26px; }
+                p { margin: 0; color: #68778d; line-height: 1.6; }
+                .track { height: 10px; overflow: hidden; margin: 24px 0 12px;
+                  border-radius: 999px; background: #dfedf8; }
+                .bar { display: block; width: 0; height: 100%; border-radius: inherit;
+                  background: #0b8ff4; transition: width .22s ease; }
+                .row { display: flex; justify-content: space-between; gap: 16px; color: #2875ad; font-size: 13px; font-weight: 700; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1 id="launch-title">正在打开你的私人网盘</h1>
+                <p id="launch-message">正在检查本地环境</p>
+                <div class="track"><i class="bar" id="launch-bar"></i></div>
+                <div class="row"><span>请保留安装助手窗口</span><span id="launch-percent">0%</span></div>
+              </main>
+            </body>
+          </html>`);
+        popup.document.close();
+        return popup;
+      }
+
+      function updateLaunchWindow(popup, progress, errorMessage = "") {
+        if (!popup || popup.closed) return;
+        const value = progress || { percent: 0, message: "正在检查本地环境" };
+        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
+        const hasError = Boolean(errorMessage) || value.stage === "error";
+        const title = popup.document.getElementById("launch-title");
+        const message = popup.document.getElementById("launch-message");
+        const bar = popup.document.getElementById("launch-bar");
+        const percentLabel = popup.document.getElementById("launch-percent");
+        if (!title || !message || !bar || !percentLabel) return;
+        title.textContent = hasError ? "网盘没有成功启动" : "正在打开你的私人网盘";
+        message.textContent = errorMessage || value.message || "正在准备";
+        bar.style.width = `${percent}%`;
+        bar.style.background = hasError ? "#c94040" : "#0b8ff4";
+        percentLabel.textContent = `${Math.round(percent)}%`;
+        popup.document.title = hasError ? "R2 Drive 启动失败" : "R2 Drive 正在启动";
+      }
+
+      function formValues(form) {
+        return Object.fromEntries(new FormData(form).entries());
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          ...options,
+          headers: {
+            "content-type": "application/json",
+            "x-r2-drive-setup-token": token,
+            ...(options.headers || {}),
+          },
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || `请求失败（${response.status}）`);
+        }
+        return result;
+      }
+
+      async function watchJob(job, options = {}) {
+        setBusy(true);
+        let current = job;
+        if (options.statusElement) {
+          setStatus(options.statusElement, "busy", options.runningText || "正在处理");
+        }
+        try {
+          if (options.onProgress) await options.onProgress(current.progress, current);
+          while (current.status === "running") {
+            byId("job-log").textContent = current.logs || "正在开始...";
+            await sleep(600);
+            current = await api(`/api/jobs/${current.id}`, { method: "GET" });
+            if (options.onProgress) await options.onProgress(current.progress, current);
+          }
+          byId("job-log").textContent = current.logs || "任务已完成。";
+          if (current.status === "error") {
+            throw new Error(current.error || "任务失败，请查看日志。");
+          }
+          if (options.statusElement) {
+            setStatus(options.statusElement, "ok", options.doneText || "已完成");
+          }
+          if (options.onDone) await options.onDone(current.result || {});
+          return current.result || {};
+        } catch (error) {
+          if (options.statusElement) {
+            setStatus(options.statusElement, "bad", error.message);
+          }
+          if (options.onError) await options.onError(error, current);
+          throw error;
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function startJob(path, body, options) {
+        const job = await api(path, {
+          method: "POST",
+          body: JSON.stringify(body || {}),
+        });
+        return watchJob(job, options);
+      }
+
+      function showStep(index, force = false) {
+        if (!force) {
+          if (index === 1 && !readyForStorage()) {
+            setStatus(byId("ready-status"), "bad", "请先完成账号和 R2 准备");
+            index = 0;
+          }
+          if (index >= 2 && !state.resourcesReady) {
+            setStatus(byId("storage-status"), "bad", "请先连接 R2 存储");
+            index = 1;
+          }
+        }
+        state.activeStep = index;
+        for (const page of pages) {
+          page.classList.toggle("active", Number(page.dataset.page) === index);
+        }
+        for (const button of navButtons) {
+          button.classList.toggle("active", Number(button.dataset.step) === index);
+        }
+        byId("top-next").textContent =
+          index === 3 ? "完成设置　›" : "继续设置　›";
+        document.querySelector(".content").scrollTop = 0;
+        if (index === 3 && state.resourcesReady && !state.domainLookupStarted) {
+          setTimeout(() => detectDomains(), 0);
+        }
+      }
+
+      function readyForStorage() {
+        return (
+          state.cloudflareChoice === "yes" &&
+          state.r2Choice !== null &&
+          state.accountConnected
+        );
+      }
+
+      function choose(group, value) {
+        const property = `${group}Choice`;
+        state[property] = value;
+        for (const button of document.querySelectorAll(`[data-choice-group="${group}"]`)) {
+          const selected = button.dataset.choiceValue === value;
+          button.classList.toggle("selected", selected);
+          button.setAttribute("aria-pressed", String(selected));
+        }
+
+        if (group === "cloudflare") {
+          byId("cloudflare-guide").classList.toggle("hidden", value !== "no");
+          byId("account-connect").classList.toggle("hidden", value !== "yes");
+          if (value === "no") state.accountConnected = false;
+        }
+        if (group === "r2") {
+          byId("r2-guide").classList.toggle("hidden", value !== "no");
+        }
+        if (group === "domain") {
+          byId("publish-form").classList.toggle("hidden", value !== "yes");
+          byId("publish-drive").classList.toggle("hidden", value !== "yes");
+          byId("local-finish").classList.toggle("hidden", value !== "no");
+          if (value !== null) byId("domain-empty").classList.add("hidden");
+          setStatus(
+            byId("publish-status"),
+            value === "yes" ? "" : "ok",
+            value === "yes" ? "域名已经自动选择" : "保留本机使用",
+          );
+        }
+      }
+
+      function useAccount(accounts, email) {
+        const selector = byId("account-choice");
+        const wrapper = byId("account-choice-wrap");
+        selector.replaceChildren();
+        if (!accounts.length) throw new Error("没有找到可用的 Cloudflare 账号。");
+
+        for (const account of accounts) {
+          const option = document.createElement("option");
+          option.value = account.id;
+          option.textContent = account.name || "Cloudflare 账号";
+          selector.append(option);
+        }
+        const configuredAccount = byId("account-id").value;
+        if (configuredAccount && accounts.some((account) => account.id === configuredAccount)) {
+          selector.value = configuredAccount;
+        }
+        wrapper.classList.toggle("hidden", accounts.length < 2);
+        byId("account-id").value = selector.value;
+        state.accounts = accounts;
+        byId("account-title").textContent =
+          accounts.length > 1 ? "账号已连接，请选择一个" : "Cloudflare 已连接";
+        byId("account-copy").textContent = email
+          ? `已通过 ${email} 登录，资源会保存在你选择的账号里。`
+          : "资源会保存在你选择的账号里。";
+        byId("login-account").classList.add("hidden");
+        byId("check-account").classList.add("hidden");
+        state.accountConnected = true;
+        state.domainLookupStarted = false;
+        state.zones = [];
+        renderAccountPlan();
+      }
+
+      function renderAccountPlan() {
+        const selected = state.accounts.find(
+          (account) => account.id === byId("account-id").value,
+        );
+        if (!selected) return;
+
+        const plan = selected.workersPlan || {
+          kind: "unknown",
+          label: "Workers 套餐未能自动识别",
+          certain: false,
+        };
+        const card = byId("account-plan-card");
+        byId("account-plan-title").textContent = plan.label;
+
+        let planCopy = "Wrangler 的普通授权无法读取完整账单，请到账号账单页确认 Free 或 Paid。";
+        if (plan.kind === "paid") {
+          planCopy = "已根据当前账号的 Workers 默认计费模型识别为付费版。";
+        } else if (plan.kind === "enterprise") {
+          planCopy = "当前账号已识别为 Cloudflare Enterprise。";
+        } else if (plan.kind === "legacy") {
+          planCopy = "检测到旧版 Bundled 计费模型，仅凭这一项无法可靠区分免费版或旧版付费版。";
+        }
+
+        byId("account-plan-copy").textContent =
+          `${planCopy} Workers 套餐不会增加 R2 免费存储：` +
+          "R2 Standard 免费层目前是每月 10 GB-month（按每天峰值的月平均计算），不是 15 GB。";
+        card.classList.remove("hidden");
+      }
+
+      async function checkAccount() {
+        choose("cloudflare", "yes");
+        try {
+          await startJob("/api/account/check", {}, {
+            statusElement: byId("account-status"),
+            runningText: "正在检查账号",
+            doneText: "账号已连接",
+            onDone: (result) => useAccount(result.accounts || [], result.email || ""),
+          });
+        } catch {
+          byId("account-title").textContent = "需要完成 Cloudflare 授权";
+          byId("account-copy").textContent =
+            "点击“打开官方授权”，在 Cloudflare 页面同意后会自动回来。";
+          byId("login-account").classList.remove("hidden");
+          byId("check-account").classList.add("hidden");
+        }
+      }
+
+      function updateAutomaticHostname() {
+        const zone = byId("zone-choice").value;
+        const prefixInput = byId("domain-prefix");
+        const prefix = prefixInput.value.trim().toLowerCase();
+        prefixInput.value = prefix;
+        byId("custom-hostname").value = zone
+          ? prefix
+            ? `${prefix}.${zone}`
+            : zone
+          : "";
+        if (zone && state.zones.length > 0) {
+          byId("zone-summary").textContent =
+            state.zones.length === 1
+              ? `已自动识别 ${zone}，无需手动填写。`
+              : `找到 ${state.zones.length} 个有效域名，当前选择 ${zone}；需要时可以切换。`;
+        }
+      }
+
+      function useDetectedZones(zones) {
+        state.zones = Array.isArray(zones) ? zones : [];
+        const selector = byId("zone-choice");
+        selector.replaceChildren();
+
+        if (!state.zones.length) {
+          state.domainChoice = null;
+          byId("publish-form").classList.add("hidden");
+          byId("publish-drive").classList.add("hidden");
+          byId("local-finish").classList.add("hidden");
+          byId("domain-empty").classList.remove("hidden");
+          byId("domain-detect-copy").textContent =
+            "当前账号没有 Active 域名，添加后可以重新识别。";
+          setStatus(byId("publish-status"), "bad", "没有找到可用域名");
+          return;
+        }
+
+        for (const zone of state.zones) {
+          const option = document.createElement("option");
+          option.value = zone.name;
+          option.textContent = zone.name;
+          selector.append(option);
+        }
+
+        const configuredHostname = state.configuredHostname.toLowerCase();
+        const configuredZone = state.zones.find(
+          (zone) =>
+            configuredHostname === zone.name ||
+            configuredHostname.endsWith(`.${zone.name}`),
+        );
+        if (configuredZone) {
+          selector.value = configuredZone.name;
+          byId("domain-prefix").value =
+            configuredHostname === configuredZone.name
+              ? ""
+              : configuredHostname.slice(0, -(configuredZone.name.length + 1));
+        } else {
+          selector.value = state.zones[0].name;
+          byId("domain-prefix").value = "drive";
+        }
+
+        updateAutomaticHostname();
+        choose("domain", "yes");
+        const count = state.zones.length;
+        byId("domain-detect-copy").textContent =
+          count === 1
+            ? `已找到 ${selector.value}`
+            : `已找到 ${count} 个域名，并自动选择了一个`;
+        setStatus(byId("publish-status"), "ok", "域名和网盘地址已自动准备");
+      }
+
+      async function detectDomains(force = false) {
+        if (state.domainLookupStarted && !force) return;
+        const accountId = byId("account-id").value.trim();
+        if (!state.accountConnected || !accountId) {
+          showStep(0, true);
+          setStatus(byId("ready-status"), "bad", "请先连接 Cloudflare 账号");
+          return;
+        }
+        state.domainLookupStarted = true;
+        byId("domain-empty").classList.add("hidden");
+        byId("publish-form").classList.add("hidden");
+        byId("publish-drive").classList.add("hidden");
+        byId("local-finish").classList.add("hidden");
+        byId("domain-detect-copy").textContent = "正在读取当前账号中的 Active 域名。";
+        try {
+          await startJob(
+            "/api/zones/list",
+            { accountId },
+            {
+              statusElement: byId("publish-status"),
+              runningText: "正在自动识别域名",
+              doneText: "域名识别完成",
+              onDone: (result) => useDetectedZones(result.zones || []),
+            },
+          );
+        } catch (error) {
+          state.domainLookupStarted = false;
+          state.domainChoice = null;
+          byId("domain-detect-copy").textContent = error.message;
+        }
+      }
+
+      function preparePayload() {
+        const values = formValues(byId("resource-form"));
+        return {
+          appName: values.appName.trim(),
+          workerName: values.workerName.trim(),
+          accountId: values.accountId.trim(),
+          d1Name: values.d1Name.trim(),
+          d1Mode: values.d1Mode,
+          d1Id: values.d1Id ? values.d1Id.trim() : "",
+          r2Name: values.r2Name.trim(),
+          r2Mode: "existing",
+          registrationMode: "closed",
+          quotaGB: Number(values.quotaGB),
+          appOrigin: "http://localhost:3000",
+          uploadMode: "auto",
+          downloadMode: "proxy",
+          publicShareCacheSeconds: Number(values.publicShareCacheSeconds),
+          enableLocalUploads: true,
+          applyCors: true,
+        };
+      }
+
+      function prepareR2CreationPayload() {
+        return {
+          accountId: byId("account-id").value.trim(),
+          r2Name: byId("r2-name").value.trim(),
+        };
+      }
+
+      function hydrate(status) {
+        const config = status.config || {};
+        byId("app-name").value = config.appName || "我的网盘";
+        byId("worker-name").value = config.workerName || "r2-drive";
+        byId("account-id").value = config.accountId || "";
+        byId("d1-name").value = config.d1Name || "r2-drive-db";
+        byId("d1-id").value = config.d1Id || "";
+        byId("r2-name").value = config.r2Name || "r2-drive-files";
+        byId("quota-gb").value = String(Number(config.quotaGB || 10));
+        byId("share-cache").value = String(
+          Number.isFinite(Number(config.publicShareCacheSeconds))
+            ? config.publicShareCacheSeconds
+            : 3600,
+        );
+        if (config.accountId) {
+          state.accountConnected = true;
+          state.cloudflareChoice = "yes";
+        }
+        if (config.d1Id) {
+          if (config.r2Name) choose("r2", "yes");
+          byId("d1-mode").value = "existing";
+          byId("d1-id-wrap").classList.remove("hidden");
+          state.resourcesReady = true;
+          setStatus(byId("storage-status"), "ok", "已有存储配置");
+        }
+        if (config.customHostname) {
+          useProductionHostname(config.customHostname);
+        }
+        if (status.hasLocalSecrets) {
+          setStatus(byId("secret-status"), "ok", "已保存在本机");
+        }
+        if (!config.customHostname && status.localDrive && status.localDrive.running) {
+          byId("open-local").classList.remove("hidden");
+          if (status.localDrive.url) byId("open-local").href = status.localDrive.url;
+          setStatus(byId("local-status"), "ok", "网盘正在运行");
+          renderLocalProgress({
+            percent: 100,
+            stage: "ready",
+            message: "账号页面已经准备好",
+          });
+        } else if (
+          !config.customHostname &&
+          status.localDrive &&
+          status.localDrive.state === "error"
+        ) {
+          const message = "检测到旧网盘异常，点击“重新启动网盘”会自动关闭旧进程";
+          setStatus(byId("local-status"), "bad", "可以自动关闭并重启");
+          renderLocalProgress(
+            {
+              percent: 12,
+              stage: "error",
+              message,
+            },
+            message,
+          );
+        }
+      }
+
+      for (const button of document.querySelectorAll("[data-choice-group]")) {
+        button.addEventListener("click", () => {
+          choose(button.dataset.choiceGroup, button.dataset.choiceValue);
+          if (
+            button.dataset.choiceGroup === "cloudflare" &&
+            button.dataset.choiceValue === "yes" &&
+            !state.accountConnected
+          ) {
+            checkAccount();
+          }
+        });
+      }
+
+      for (const button of navButtons) {
+        button.addEventListener("click", () => showStep(Number(button.dataset.step)));
+      }
+
+      for (const button of document.querySelectorAll("[data-back]")) {
+        button.addEventListener("click", () => showStep(Number(button.dataset.back), true));
+      }
+
+      byId("account-choice").addEventListener("change", (event) => {
+        byId("account-id").value = event.target.value;
+        state.domainLookupStarted = false;
+        state.zones = [];
+        renderAccountPlan();
+      });
+
+      byId("d1-mode").addEventListener("change", (event) => {
+        byId("d1-id-wrap").classList.toggle("hidden", event.target.value !== "existing");
+      });
+
+      byId("r2-created").addEventListener("click", () => choose("r2", "yes"));
+      byId("check-account").addEventListener("click", checkAccount);
+
+      byId("login-account").addEventListener("click", async () => {
+        try {
+          await startJob("/api/account/login", {}, {
+            statusElement: byId("account-status"),
+            runningText: "等待官方授权",
+            doneText: "授权完成",
+          });
+          byId("check-account").classList.remove("hidden");
+          await checkAccount();
+        } catch {
+          byId("login-account").classList.remove("hidden");
+        }
+      });
+
+      function continueFromReady() {
+        if (state.cloudflareChoice !== "yes") {
+          setStatus(byId("ready-status"), "bad", "请选择“有 Cloudflare 账号”");
+          return;
+        }
+        if (!state.accountConnected) {
+          setStatus(byId("ready-status"), "bad", "请先连接 Cloudflare 账号");
+          byId("account-connect").scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        if (state.r2Choice === null) {
+          setStatus(byId("ready-status"), "bad", "请选择是否已经有 R2 存储桶");
+          return;
+        }
+        setStatus(
+          byId("ready-status"),
+          "ok",
+          state.r2Choice === "yes" ? "准备完成" : "下一页一键创建 R2",
+        );
+        showStep(1, true);
+      }
+
+      byId("ready-next").addEventListener("click", continueFromReady);
+
+      async function connectStorage() {
+        if (!state.accountConnected) {
+          showStep(0, true);
+          setStatus(byId("ready-status"), "bad", "请先连接 Cloudflare 账号");
+          return;
+        }
+        if (!byId("resource-form").reportValidity()) return;
+        try {
+          await startJob("/api/configure", preparePayload(), {
+            statusElement: byId("storage-status"),
+            runningText: "正在检查并连接",
+            doneText: "存储已经连接",
+            onDone: (result) => {
+              state.resourcesReady = true;
+              byId("d1-mode").value = "existing";
+              byId("d1-id").value = result.d1Id || "";
+              byId("d1-id-wrap").classList.remove("hidden");
+              if (result.d1Reused) {
+                setStatus(
+                  byId("storage-status"),
+                  "ok",
+                  "已找到原来的资料数据库并继续",
+                );
+              }
+              showStep(2, true);
+            },
+          });
+        } catch (error) {
+          if (error.message.includes("一键创建 R2 桶")) {
+            setStatus(byId("r2-create-status"), "bad", "尚未创建，请点击左侧按钮");
+            byId("create-r2").focus();
+            return;
+          }
+          byId("log-dialog").showModal();
+        }
+      }
+
+      byId("connect-storage").addEventListener("click", connectStorage);
+
+      byId("create-r2").addEventListener("click", async () => {
+        if (!state.accountConnected || !byId("account-id").value.trim()) {
+          showStep(0, true);
+          setStatus(byId("ready-status"), "bad", "请先连接 Cloudflare 账号");
+          return;
+        }
+        if (!byId("r2-name").reportValidity()) return;
+        try {
+          await startJob("/api/r2/create", prepareR2CreationPayload(), {
+            statusElement: byId("r2-create-status"),
+            runningText: "正在创建私人存储桶",
+            doneText: "R2 存储桶可以使用",
+            onDone: (result) => {
+              choose("r2", "yes");
+              setStatus(
+                byId("r2-create-status"),
+                "ok",
+                result.created ? "创建成功，位置为 APAC" : "同名存储桶已存在，直接使用",
+              );
+              setStatus(byId("storage-status"), "", "R2 已就绪，请继续连接存储");
+            },
+          });
+        } catch {
+          byId("log-dialog").showModal();
+        }
+      });
+
+      byId("start-local").addEventListener("click", async () => {
+        const productionUrl = byId("start-local").dataset.productionUrl;
+        if (productionUrl) {
+          window.open(productionUrl, "_blank", "noopener,noreferrer");
+          return;
+        }
+        if (!state.resourcesReady) {
+          showStep(1, true);
+          setStatus(byId("storage-status"), "bad", "请先连接 R2 存储");
+          return;
+        }
+        const opened = createLaunchWindow();
+        byId("local-help").classList.add("hidden");
+        renderLocalProgress({
+          percent: 2,
+          stage: "starting",
+          message: "正在提交启动任务",
+        });
+        updateLaunchWindow(opened, {
+          percent: 2,
+          stage: "starting",
+          message: "正在提交启动任务",
+        });
+        try {
+          await startJob("/api/local/start", {}, {
+            statusElement: byId("local-status"),
+            runningText: "正在启动网盘",
+            doneText: "网盘正在运行",
+            onProgress: (progress) => {
+              if (!progress) return;
+              renderLocalProgress(progress);
+              updateLaunchWindow(opened, progress);
+            },
+            onDone: (result) => {
+              const url = result.url || "http://localhost:3000/start";
+              byId("open-local").href = url;
+              byId("open-local").classList.remove("hidden");
+              renderLocalProgress({
+                percent: 100,
+                stage: "ready",
+                message: "账号页面已经准备好，正在打开",
+              });
+              if (opened) opened.location.href = url;
+              else window.open(url, "_blank", "noopener,noreferrer");
+            },
+            onError: (error, current) => {
+              const progress = current && current.progress
+                ? current.progress
+                : { percent: 10, stage: "error", message: error.message };
+              setStatus(byId("local-status"), "bad", "启动失败，请查看原因");
+              renderLocalProgress(progress, error.message);
+              updateLaunchWindow(opened, progress, error.message);
+            },
+          });
+        } catch {
+          // The inline progress card and launch window already show the recovery message.
+        }
+      });
+
+      byId("local-log-open").addEventListener("click", () => {
+        byId("log-dialog").showModal();
+      });
+
+      byId("local-secrets-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          const values = formValues(event.currentTarget);
+          await api("/api/local-secrets", {
+            method: "POST",
+            body: JSON.stringify(values),
+          });
+          event.currentTarget.reset();
+          setStatus(byId("secret-status"), "ok", "已保存在本机");
+        } catch (error) {
+          setStatus(byId("secret-status"), "bad", error.message);
+        }
+      });
+
+      byId("domain-next").addEventListener("click", () => showStep(3, true));
+      byId("detect-domains").addEventListener("click", () => detectDomains(true));
+      byId("zone-choice").addEventListener("change", updateAutomaticHostname);
+      byId("domain-prefix").addEventListener("input", updateAutomaticHostname);
+      byId("local-only-finish").addEventListener("click", () => {
+        choose("domain", "no");
+        setStatus(byId("publish-status"), "ok", "设置完成，可以继续本机使用");
+      });
+
+      byId("publish-drive").addEventListener("click", async () => {
+        if (state.domainChoice !== "yes") {
+          setStatus(byId("publish-status"), "bad", "请先选择“有域名”");
+          return;
+        }
+        const form = byId("publish-form");
+        if (!form.reportValidity()) return;
+        const values = formValues(form);
+        const hostname = values.customHostname.trim();
+        byId("domain-error-help").classList.add("hidden");
+        try {
+          await startJob(
+            "/api/deploy",
+            {
+              customHostname: hostname,
+              accessKeyId: values.accessKeyId || "",
+              secretAccessKey: values.secretAccessKey || "",
+              confirm: true,
+            },
+            {
+              statusElement: byId("publish-status"),
+              runningText: "正在发布并绑定",
+              doneText: "域名已经绑定",
+              onDone: (result) => {
+                useProductionHostname(result.hostname || hostname);
+                byId("open-production").href = result.url;
+                byId("open-production").classList.remove("hidden");
+              },
+            },
+          );
+        } catch (error) {
+          const reason =
+            error instanceof Error && error.message
+              ? error.message
+              : "请打开处理日志查看具体原因。";
+          byId("domain-error-help").textContent =
+            `自动绑定 ${hostname} 没有完成：${reason} 这不一定是域名或 DNS 问题，请先查看处理日志。`;
+          byId("domain-error-help").classList.remove("hidden");
+          byId("domain-help").open = true;
+          byId("domain-help").scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+
+      function openCurrentHelp() {
+        window.open(helpUrls[state.activeStep], "_blank", "noopener,noreferrer");
+      }
+
+      byId("help-top").addEventListener("click", openCurrentHelp);
+      byId("help-rail").addEventListener("click", openCurrentHelp);
+      byId("check-environment").addEventListener("click", checkAccount);
+      byId("log-open").addEventListener("click", () => byId("log-dialog").showModal());
+      byId("log-close").addEventListener("click", () => byId("log-dialog").close());
+
+      byId("top-next").addEventListener("click", () => {
+        if (state.activeStep === 0) continueFromReady();
+        else if (state.activeStep === 1) connectStorage();
+        else if (state.activeStep === 2) showStep(3, true);
+        else if (state.domainChoice === "yes") byId("publish-drive").click();
+        else byId("local-only-finish").click();
+      });
+
+      api("/api/status", { method: "GET" })
+        .then(async (status) => {
+          hydrate(status);
+          if (status.currentJob && status.currentJob.status === "running") {
+            await watchJob(status.currentJob, {
+              statusElement: byId("storage-status"),
+              runningText: "正在恢复任务",
+              doneText: "任务已完成",
+            });
+            hydrate(await api("/api/status", { method: "GET" }));
+          }
+          if (requestedStep === "domain") {
+            showStep(state.resourcesReady ? 3 : 1, true);
+            if (!state.resourcesReady) {
+              setStatus(byId("storage-status"), "bad", "请先连接 R2 存储，再绑定域名");
+            }
+          }
+        })
+        .catch((error) => {
+          setStatus(byId("ready-status"), "bad", error.message);
+        });
+    </script>
+  </body>
+</html>
