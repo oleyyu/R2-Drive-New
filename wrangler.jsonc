@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "r2-drive",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-05-22",
+  "compatibility_date": "2026-07-29",
   "compatibility_flags": ["nodejs_compat"],
   "placement": {
     "mode": "smart"

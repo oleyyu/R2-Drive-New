@@ -1,6 +1,6 @@
 {
   "name": "r2-drive",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -34,6 +34,7 @@
     "next": "^16.2.12",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "tar": "^7.5.22",
     "undici": "^7.29.0",
     "zod": "^4.4.3"
   },

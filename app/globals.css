@@ -1988,6 +1988,92 @@ html[data-density="compact"] .app-content {
   white-space: nowrap;
 }
 
+.update-panel {
+  min-height: 116px;
+  padding: 20px 22px;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(260px, 1.4fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+.update-version,
+.update-state {
+  min-width: 0;
+}
+
+.update-version span,
+.update-version strong,
+.update-version small,
+.update-state strong,
+.update-state small {
+  display: block;
+}
+
+.update-version span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.update-version strong {
+  margin-top: 5px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 20px;
+}
+
+.update-version small,
+.update-state small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.update-state {
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--page);
+}
+
+.update-state strong {
+  font-size: 10px;
+}
+
+.update-state.available {
+  border-color: #acd5be;
+  background: var(--positive-soft);
+}
+
+.update-state.available strong,
+.update-state.current strong {
+  color: var(--positive);
+}
+
+.update-state.bad {
+  border-color: #efc0bd;
+  background: var(--danger-soft);
+}
+
+.update-state.bad strong {
+  color: var(--danger);
+}
+
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.update-footnote {
+  margin: 0;
+  padding: 0 22px 18px;
+  color: var(--faint);
+  font-size: 8px;
+  line-height: 1.6;
+}
+
 .admin-user-head,
 .admin-user-row {
   display: grid;
@@ -2350,6 +2436,12 @@ html[data-density="compact"] .app-content {
   .domain-binding-panel > .button {
     grid-column: 1 / -1;
     justify-self: start;
+  }
+  .update-panel {
+    grid-template-columns: 1fr;
+  }
+  .update-actions {
+    justify-content: flex-start;
   }
   .share-panel { margin-top: 40px; padding: 50px 24px 35px; }
   .share-constraints { align-items: flex-start; flex-direction: column; }

@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "managedTopLevel": [
+    ".dev.vars.example",
+    ".github",
+    ".gitignore",
+    ".r2-drive-release.json",
+    "LICENSE",
+    "R2-Drive.bat",
+    "R2-Drive.command",
+    "README.md",
+    "app",
+    "components",
+    "config",
+    "db",
+    "docs",
+    "drizzle",
+    "drizzle.config.ts",
+    "eslint.config.mjs",
+    "lib",
+    "next.config.ts",
+    "package-lock.json",
+    "package.json",
+    "postcss.config.mjs",
+    "public",
+    "scripts",
+    "tests",
+    "tsconfig.json",
+    "vite.config.ts",
+    "worker",
+    "worker-secrets.d.ts"
+  ]
+}

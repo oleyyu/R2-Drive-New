@@ -8,8 +8,8 @@ R2 Drive 是开源自托管项目，不提供由项目作者管理的共享实�
 
 | 系统 | 双击文件 | 功能 |
 | --- | --- | --- |
-| macOS | `R2-Drive.command` | 检查 Node.js 并显示打开、配置、删除菜单 |
-| Windows | `R2-Drive.bat` | 检查 Node.js 并显示打开、配置、删除菜单 |
+| macOS | `R2-Drive.command` | 检查 Node.js 并显示打开、配置、删除、更新菜单 |
+| Windows | `R2-Drive.bat` | 检查 Node.js 并显示打开、配置、删除、更新菜单 |
 
 首次使用选择“2. 配置／重新配置”；配置完成后，每次选择“1. 打开网盘【已配置完毕】”即可。普通用户不必看懂或输入 localhost 地址。启动器不会读取或上传浏览器密码，也不会把 Cloudflare 凭据发送给项目作者。Node.js 缺失或版本过旧时，会打开 Node.js 官方下载页；安装完成后再次双击即可。
 
@@ -50,6 +50,8 @@ R2_DRIVE_SETUP_PORT=8790 npm run setup
 | 本地 Secret | 写入 `.dev.vars`，权限 `0600` | 否 |
 | 生产 Secret | `wrangler secret put <固定名称>` | 是，写入当前 Worker |
 | 部署 | `npm run check` 后运行 `npm run deploy` | 是，仅在明确勾选后 |
+| 检查更新 | 读取本仓库的 GitHub Latest Release | 否 |
+| 安装更新 | 备份后下载、校验、测试、迁移并运行 `npm run deploy` | 是，仅在更新页明确勾选后 |
 | 清空 R2 | Cloudflare 官方 R2 Object API 分页列出并删除对象 | 是，仅在菜单第 3 项输入 `DELETE` 后 |
 | 删除 R2 | `wrangler r2 bucket delete <桶>` | 是，清空对象后删除当前桶 |
 | 删除 D1 | `wrangler d1 delete <库> --skip-confirmation` | 是，先核对当前实例保存的数据库编号 |
@@ -178,6 +180,14 @@ npx wrangler secret put R2_SECRET_ACCESS_KEY
 若 `wrangler whoami --json` 显示了多个账号，从输入框建议列表中选择目标账号的 Account ID，再创建资源。
 
 若点击“启动并打开网盘”后提示旧服务异常，直接点击“重新启动网盘”，安装助手会自动关闭能确认属于当前项目的旧进程。这不会删除 R2 桶、D1 数据库或更改 Cloudflare 配置。若端口由其他软件占用，助手会为避免误关程序而停止，并在页面显示端口号。
+
+## 一键更新
+
+线上管理页的“程序更新”只负责读取 GitHub 正式版信息，不持有 Wrangler 登录或 Cloudflare 密钥。点击“在本机安装更新”会打开只监听 `127.0.0.1` 的本机助手；如果按钮提示无法连接，先双击启动器选择“1. 打开网盘”，再返回管理页点击一次。也可以直接在启动器选择“4. 检查更新／一键升级”。
+
+安装前必须勾选确认。更新器会下载本项目 GitHub Release、限制下载体积、拒绝符号链接和越界路径，并校验包名、版本与必要文件。随后它备份受管理的源代码和 `wrangler.jsonc`，保留当前 Account ID、D1、R2、域名、容量设置、`.dev.vars` 及本机 CORS，再运行完整检查、远程 D1 迁移和域名 Worker 发布。程序检查或发布前的本地步骤失败时会自动恢复旧版；R2 文件不会参与源码替换。
+
+若当前没有绑定域名，更新器只升级本机程序和数据库，不会凭空创建公网地址。若 Wrangler 官方 OAuth 已过期，需要先在配置助手重新连接 Cloudflare，再重试更新。
 
 ## 删除当前实例
 

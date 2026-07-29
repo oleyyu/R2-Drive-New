@@ -27,6 +27,14 @@ Authorization: Bearer r2d_...
 
 账号设置、API Token 管理和管理员路由只接受浏览器会话。
 
+管理员可手动检查正式版：
+
+```http
+GET /api/admin/update
+```
+
+该接口只返回当前版本、GitHub 最新正式版和 Release 页面，不执行安装。更新需要本机 Wrangler，因此只能在回环地址的安装助手中由使用者明确确认，不能通过公开 Worker API 触发。
+
 ## 文件
 
 ```http

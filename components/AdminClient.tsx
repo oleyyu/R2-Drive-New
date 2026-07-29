@@ -6,6 +6,7 @@ import {
   Check,
   Clipboard,
   Cloud,
+  CloudArrowDown,
   Database,
   File,
   Gauge,
@@ -13,6 +14,7 @@ import {
   HardDrives,
   Key,
   Pulse,
+  RocketLaunch,
   ShieldCheck,
   SlidersHorizontal,
   Trash,
@@ -24,6 +26,7 @@ import { AppShell } from "@/components/AppShell";
 type Overview = {
   metrics: { users: number; storage: number; files: number; activeUploads: number };
   runtime: {
+    appVersion: string;
     directUpload: boolean;
     uploadMode: "auto" | "direct" | "proxy";
     downloadMode: "direct" | "proxy";
@@ -65,6 +68,15 @@ type Invitation = {
   createdAt: string;
 };
 
+type UpdateInformation = {
+  currentVersion: string;
+  latestVersion: string;
+  available: boolean;
+  releaseName: string;
+  releaseUrl: string;
+  publishedAt: string;
+};
+
 function formatBytes(value: number): string {
   if (!value) return "0 B";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -78,6 +90,9 @@ export function AdminClient() {
   const [notice, setNotice] = useState("");
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [createdInvite, setCreatedInvite] = useState("");
+  const [updateInfo, setUpdateInfo] = useState<UpdateInformation | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateError, setUpdateError] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -160,6 +175,35 @@ export function AdminClient() {
     if (response.ok) await load();
   }
 
+  async function checkForUpdates() {
+    setUpdateChecking(true);
+    setUpdateError("");
+    try {
+      const response = await fetch("/api/admin/update", { cache: "no-store" });
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string };
+      } & Partial<UpdateInformation>;
+      if (
+        !response.ok ||
+        typeof result.currentVersion !== "string" ||
+        typeof result.latestVersion !== "string" ||
+        typeof result.available !== "boolean" ||
+        typeof result.releaseUrl !== "string"
+      ) {
+        throw new Error(result.error?.message || "暂时无法连接 GitHub 检查更新。");
+      }
+      setUpdateInfo(result as UpdateInformation);
+    } catch (updateFailure) {
+      setUpdateError(
+        updateFailure instanceof Error
+          ? updateFailure.message
+          : "暂时无法检查更新。",
+      );
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
   return (
     <AppShell title="管理控制台" detail="实例运行状态、用户策略与交付配置">
       {error ? (
@@ -219,6 +263,84 @@ export function AdminClient() {
                 {overview.runtime.sharingEnabled ? "更换绑定域名" : "绑定域名"}
               </a>
             </div>
+          </section>
+
+          <section className="admin-section update-section">
+            <div className="settings-section-title">
+              <CloudArrowDown />
+              <div>
+                <h2>程序更新</h2>
+                <p>从官方 GitHub Release 检查新版；安装动作只由你电脑上的本地助手执行。</p>
+              </div>
+            </div>
+            <div className="update-panel">
+              <div className="update-version">
+                <span>当前版本</span>
+                <strong>v{overview.runtime.appVersion}</strong>
+                {updateInfo && (
+                  <small>
+                    最新版本 v{updateInfo.latestVersion}
+                    {updateInfo.publishedAt
+                      ? ` · ${new Date(updateInfo.publishedAt).toLocaleDateString("zh-CN")}`
+                      : ""}
+                  </small>
+                )}
+              </div>
+              <div
+                className={`update-state ${
+                  updateError
+                    ? "bad"
+                    : updateInfo?.available
+                      ? "available"
+                      : updateInfo
+                        ? "current"
+                        : ""
+                }`}
+              >
+                <strong>
+                  {updateChecking
+                    ? "正在检查 GitHub…"
+                    : updateError
+                      ? "检查失败"
+                      : updateInfo?.available
+                        ? "发现可安装的新版本"
+                        : updateInfo
+                          ? "当前已经是最新版"
+                          : "尚未检查更新"}
+                </strong>
+                <small>
+                  {updateError ||
+                    (updateInfo?.available
+                      ? `${updateInfo.releaseName} 已准备好。`
+                      : "不会上传 Cloudflare 密钥，也不会修改 R2 文件。")}
+                </small>
+              </div>
+              <div className="update-actions">
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => { void checkForUpdates(); }}
+                  disabled={updateChecking}
+                >
+                  <ArrowClockwise className={updateChecking ? "spin" : ""} />
+                  {updateChecking ? "正在检查" : "一键检查更新"}
+                </button>
+                {updateInfo?.available && (
+                  <a
+                    className="button button-primary"
+                    href="http://127.0.0.1:8788/?step=update"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <RocketLaunch />
+                    在本机安装更新
+                  </a>
+                )}
+              </div>
+            </div>
+            <p className="update-footnote">
+              请通过 R2 Drive 启动器打开网盘并保持终端窗口运行。本地助手会先备份程序和配置，再检查、迁移并重新发布；失败时自动恢复本地旧版。
+            </p>
           </section>
 
           <section className="admin-section">

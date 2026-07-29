@@ -12,6 +12,16 @@ import {
   classifyWorkersPlan,
   R2_STANDARD_FREE_TIER,
 } from "./cloudflare-plan.mjs";
+import {
+  applyReleaseTree,
+  compareVersions,
+  createUpdateWorkspace,
+  downloadReleaseArchive,
+  extractReleaseArchive,
+  fetchLatestRelease,
+  removeUpdateWorkspace,
+  rollbackReleaseTree,
+} from "./updater.mjs";
 import { findD1DatabaseByName, parseWranglerJson } from "./wrangler-output.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -308,6 +318,13 @@ function runWrangler(job, args, options = {}) {
 
 function runNpm(job, args, options = {}) {
   return runProcess(job, "npm", args, options);
+}
+
+function githubFetch(url, options = {}) {
+  return undiciFetch(url, {
+    ...options,
+    dispatcher: cloudflareDispatcher,
+  });
 }
 
 function publicJob(job) {
@@ -1040,6 +1057,7 @@ async function getStatus() {
   }
   return {
     node: process.version,
+    version: JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8")).version,
     config: {
       appName: config.vars?.APP_NAME ?? "R2 Drive",
       workerName: config.name ?? "r2-drive",
@@ -1073,6 +1091,169 @@ async function getStatus() {
     },
     currentJob: currentJobId ? publicJob(jobs.get(currentJobId)) : null,
   };
+}
+
+async function checkForUpdates(job) {
+  setJobProgress(job, 15, "checking", "正在连接 GitHub Releases");
+  const packageMetadata = JSON.parse(
+    await readFile(path.join(ROOT, "package.json"), "utf8"),
+  );
+  const release = await fetchLatestRelease(githubFetch);
+  const available = compareVersions(release.version, packageMetadata.version) > 0;
+  setJobProgress(
+    job,
+    100,
+    available ? "available" : "current",
+    available ? `发现新版本 v${release.version}` : "当前已经是最新版",
+  );
+  return {
+    currentVersion: packageMetadata.version,
+    latestVersion: release.version,
+    available,
+    releaseName: release.name,
+    releaseUrl: release.url,
+    publishedAt: release.publishedAt,
+  };
+}
+
+async function installLatestUpdate(job, body) {
+  if (body.confirm !== true) {
+    throw new Error("安装更新需要当前用户明确确认。");
+  }
+
+  setJobProgress(job, 5, "checking", "正在确认当前版本和 Cloudflare 登录");
+  const packageMetadata = JSON.parse(
+    await readFile(path.join(ROOT, "package.json"), "utf8"),
+  );
+  const release = await fetchLatestRelease(githubFetch);
+  if (
+    typeof body.version === "string" &&
+    body.version &&
+    body.version !== release.version
+  ) {
+    throw new Error("最新版本已经变化，请重新检查后再安装。");
+  }
+  if (compareVersions(release.version, packageMetadata.version) <= 0) {
+    setJobProgress(job, 100, "current", "当前已经是最新版");
+    return {
+      alreadyCurrent: true,
+      version: packageMetadata.version,
+      releaseUrl: release.url,
+    };
+  }
+
+  const currentConfig = await readConfig();
+  const database = currentConfig.d1_databases?.[0]?.database_name;
+  const databaseId = currentConfig.d1_databases?.[0]?.database_id;
+  const customHostname =
+    currentConfig.routes?.find((route) => route?.custom_domain)?.pattern ?? "";
+  if (!database || !databaseId) {
+    throw new Error("当前网盘缺少 D1 配置，请先完成网盘配置再更新。");
+  }
+  await checkWranglerAccount(job);
+  const occupied = await stopPreviousLocalDrive(job);
+  if (occupied.occupiedByAnotherApp) {
+    throw new Error(`本地端口 ${LOCAL_PORT} 被其他软件占用，请先关闭该软件。`);
+  }
+
+  const update = await createUpdateWorkspace();
+  let transaction = null;
+  let rollbackCompleted = false;
+  try {
+    setJobProgress(job, 15, "downloading", `正在下载 v${release.version}`);
+    await downloadReleaseArchive(
+      release,
+      update.archivePath,
+      githubFetch,
+      ({ percent }) => {
+        const scaled = percent > 0 ? 15 + percent * 0.12 : 18;
+        setJobProgress(job, scaled, "downloading", `正在下载 v${release.version}`);
+      },
+    );
+
+    setJobProgress(job, 30, "verifying", "正在校验官方更新包");
+    await extractReleaseArchive(
+      update.archivePath,
+      update.releaseRoot,
+      release.version,
+    );
+
+    setJobProgress(job, 38, "backup", "正在备份当前程序和实例配置");
+    transaction = await applyReleaseTree({
+      root: ROOT,
+      releaseRoot: update.releaseRoot,
+      backupRoot: update.backupRoot,
+    });
+
+    setJobProgress(job, 50, "dependencies", "正在安装新版组件");
+    await runNpm(job, ["install", "--no-audit", "--no-fund"], {
+      label: "安装新版组件",
+    });
+
+    setJobProgress(job, 64, "testing", "正在检查新版页面和代码");
+    await runNpm(job, ["run", "check"], { label: "检查新版" });
+
+    setJobProgress(job, 76, "migrating", "正在升级本机资料数据库");
+    await runWrangler(
+      job,
+      ["d1", "migrations", "apply", database, "--local", "--config", CONFIG_PATH],
+      { label: `升级本机资料数据库 ${database}`, ci: true },
+    );
+
+    setJobProgress(job, 84, "migrating", "正在安全升级线上资料数据库");
+    await runWrangler(
+      job,
+      ["d1", "migrations", "apply", database, "--remote", "--config", CONFIG_PATH],
+      { label: `升级资料数据库 ${database}`, ci: true },
+    );
+
+    if (customHostname) {
+      setJobProgress(job, 90, "deploying", `正在更新 ${customHostname}`);
+      await runNpm(job, ["run", "deploy"], {
+        label: `发布 v${release.version} 到 ${customHostname}`,
+      });
+    }
+
+    setJobProgress(job, 100, "ready", `v${release.version} 已安装完成`);
+    await removeUpdateWorkspace(update.workspace);
+    return {
+      version: release.version,
+      releaseUrl: release.url,
+      deployed: Boolean(customHostname),
+      url: customHostname ? `https://${customHostname}/admin` : "",
+    };
+  } catch (error) {
+    if (transaction) {
+      addLog(job, "\n更新没有完成，正在恢复更新前的程序和配置。\n");
+      try {
+        await rollbackReleaseTree(transaction);
+        await runNpm(job, ["install", "--no-audit", "--no-fund"], {
+          label: "恢复旧版组件",
+        });
+        await runNpm(job, ["run", "types"], {
+          label: "恢复旧版类型配置",
+        });
+        rollbackCompleted = true;
+        addLog(job, "✓ 已恢复更新前的本地版本。\n");
+      } catch (rollbackError) {
+        addLog(
+          job,
+          `✕ 自动恢复没有完成：${
+            rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+          }\n`,
+        );
+      }
+    }
+    if (rollbackCompleted) {
+      await removeUpdateWorkspace(update.workspace);
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      rollbackCompleted
+        ? `${reason} 已恢复更新前的本地程序；Cloudflare 中的 R2 文件不会受影响。`
+        : `${reason} 备份保留在 ${update.backupRoot}，请勿删除并查看处理日志。`,
+    );
+  }
 }
 
 async function checkWranglerAccount(job) {
@@ -1272,7 +1453,14 @@ async function listCloudflareZones(job, body) {
 
 function isLocalRequest(request) {
   const remote = request.socket.remoteAddress;
-  return remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  const localAddress =
+    remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  const host = String(request.headers.host || "").toLowerCase();
+  const localHost =
+    host === `${HOST}:${PORT}` ||
+    host === `localhost:${PORT}` ||
+    host === `[::1]:${PORT}`;
+  return localAddress && localHost;
 }
 
 function sendJson(response, status, value) {
@@ -1398,6 +1586,19 @@ async function route(request, response) {
       response,
       202,
       startJob("deploy", (job) => deployToOwnAccount(job, body)),
+    );
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/update/check") {
+    sendJson(response, 202, startJob("update-check", checkForUpdates));
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/update/install") {
+    const body = await readJson(request);
+    sendJson(
+      response,
+      202,
+      startJob("update-install", (job) => installLatestUpdate(job, body)),
     );
     return;
   }

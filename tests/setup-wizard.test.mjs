@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFile, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -20,10 +28,16 @@ import {
   encodeR2ObjectKey,
   formatMenu,
 } from "../scripts/launcher.mjs";
+import {
+  applyReleaseTree,
+  compareVersions,
+  mergeInstanceConfig,
+  rollbackReleaseTree,
+} from "../scripts/updater.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-test("ships a safe three-choice beginner launcher on macOS and Windows", async () => {
+test("ships a safe beginner launcher on macOS and Windows", async () => {
   const commandPath = path.join(root, "R2-Drive.command");
   const batchPath = path.join(root, "R2-Drive.bat");
   const launcherPath = path.join(root, "scripts", "launcher.mjs");
@@ -42,6 +56,8 @@ test("ships a safe three-choice beginner launcher on macOS and Windows", async (
   assert.match(launcher, /1\. 打开网盘【\$\{status\}】/);
   assert.match(launcher, /2\. 配置／重新配置/);
   assert.match(launcher, /3\. 删除所有信息/);
+  assert.match(launcher, /4\. 检查更新／一键升级/);
+  assert.match(launcher, /SETUP_URL}\?step=update/);
   assert.match(launcher, /setup\.mjs"\), "--no-open"/);
   assert.match(launcher, /请输入 DELETE 后回车/);
   assert.match(launcher, /r2", "bucket", "delete"/);
@@ -86,6 +102,146 @@ test("ships a safe three-choice beginner launcher on macOS and Windows", async (
   assert.match(menuOutput, /1\. 打开网盘【已配置完毕】/);
   assert.match(menuOutput, /2\. 配置／重新配置/);
   assert.match(menuOutput, /3\. 删除所有信息/);
+  assert.match(menuOutput, /4\. 检查更新／一键升级/);
+});
+
+test("updater preserves instance data and can roll local source back", async () => {
+  assert.equal(compareVersions("0.2.0", "0.1.9"), 1);
+  assert.equal(compareVersions("v0.2.0", "0.2.0"), 0);
+  assert.equal(compareVersions("0.2.0-beta.1", "0.2.0"), -1);
+
+  const merged = mergeInstanceConfig(
+    {
+      main: "dist/server/index.js",
+      compatibility_date: "2026-07-29",
+      vars: { NEW_SAFE_DEFAULT: "yes", APP_NAME: "默认网盘" },
+    },
+    {
+      account_id: "a".repeat(32),
+      compatibility_date: "2025-01-01",
+      vars: { APP_NAME: "我的私人网盘" },
+      routes: [{ pattern: "drive.example.com", custom_domain: true }],
+    },
+  );
+  assert.equal(merged.compatibility_date, "2026-07-29");
+  assert.equal(merged.account_id, "a".repeat(32));
+  assert.equal(merged.vars.APP_NAME, "我的私人网盘");
+  assert.equal(merged.vars.NEW_SAFE_DEFAULT, "yes");
+  assert.equal(merged.routes[0].pattern, "drive.example.com");
+
+  const temporary = await mkdtemp(path.join(tmpdir(), "r2-drive-updater-test-"));
+  const instanceRoot = path.join(temporary, "instance");
+  const releaseRoot = path.join(temporary, "release");
+  const backupRoot = path.join(temporary, "backup");
+  const oldConfig = {
+    name: "r2-drive-personal",
+    account_id: "b".repeat(32),
+    compatibility_date: "2025-01-01",
+    vars: { APP_NAME: "我的私人网盘", QUOTA_BYTES: "123456" },
+    d1_databases: [
+      {
+        binding: "DB",
+        database_name: "my-drive-db",
+        database_id: "123e4567-e89b-42d3-a456-426614174000",
+      },
+    ],
+    r2_buckets: [{ binding: "FILES", bucket_name: "my-drive-files" }],
+    routes: [{ pattern: "drive.example.com", custom_domain: true }],
+  };
+
+  try {
+    await Promise.all([
+      mkdir(path.join(instanceRoot, "config"), { recursive: true }),
+      mkdir(path.join(releaseRoot, "config"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        path.join(instanceRoot, ".r2-drive-release.json"),
+        JSON.stringify({
+          version: "0.1.0",
+          managedTopLevel: [
+            ".r2-drive-release.json",
+            "config",
+            "obsolete.txt",
+            "package.json",
+          ],
+        }),
+      ),
+      writeFile(
+        path.join(instanceRoot, "package.json"),
+        JSON.stringify({ name: "r2-drive", version: "0.1.0" }),
+      ),
+      writeFile(path.join(instanceRoot, "obsolete.txt"), "old source"),
+      writeFile(path.join(instanceRoot, "wrangler.jsonc"), JSON.stringify(oldConfig)),
+      writeFile(
+        path.join(instanceRoot, "config", "r2-cors.local.json"),
+        '{"rules":["personal"]}',
+      ),
+      writeFile(
+        path.join(releaseRoot, ".r2-drive-release.json"),
+        JSON.stringify({
+          version: "0.2.0",
+          managedTopLevel: [".r2-drive-release.json", "config", "package.json"],
+        }),
+      ),
+      writeFile(
+        path.join(releaseRoot, "package.json"),
+        JSON.stringify({ name: "r2-drive", version: "0.2.0" }),
+      ),
+      writeFile(
+        path.join(releaseRoot, "wrangler.jsonc"),
+        JSON.stringify({
+          name: "r2-drive",
+          main: "dist/server/index.js",
+          compatibility_date: "2026-07-29",
+          vars: { NEW_SAFE_DEFAULT: "yes", APP_NAME: "默认网盘" },
+        }),
+      ),
+      writeFile(
+        path.join(releaseRoot, "config", "r2-cors.local.json"),
+        '{"rules":["release-default"]}',
+      ),
+      writeFile(path.join(releaseRoot, "config", "new-default.txt"), "new source"),
+    ]);
+
+    const transaction = await applyReleaseTree({
+      root: instanceRoot,
+      releaseRoot,
+      backupRoot,
+    });
+    const updatedPackage = JSON.parse(
+      await readFile(path.join(instanceRoot, "package.json"), "utf8"),
+    );
+    const updatedConfig = JSON.parse(
+      await readFile(path.join(instanceRoot, "wrangler.jsonc"), "utf8"),
+    );
+    assert.equal(updatedPackage.version, "0.2.0");
+    assert.equal(updatedConfig.compatibility_date, "2026-07-29");
+    assert.equal(updatedConfig.account_id, oldConfig.account_id);
+    assert.equal(updatedConfig.d1_databases[0].database_id, oldConfig.d1_databases[0].database_id);
+    assert.equal(updatedConfig.r2_buckets[0].bucket_name, "my-drive-files");
+    assert.equal(updatedConfig.routes[0].pattern, "drive.example.com");
+    assert.equal(updatedConfig.vars.APP_NAME, "我的私人网盘");
+    assert.equal(updatedConfig.vars.NEW_SAFE_DEFAULT, "yes");
+    assert.equal(
+      await readFile(path.join(instanceRoot, "config", "r2-cors.local.json"), "utf8"),
+      '{"rules":["personal"]}',
+    );
+    await assert.rejects(readFile(path.join(instanceRoot, "obsolete.txt"), "utf8"));
+
+    await rollbackReleaseTree(transaction);
+    assert.equal(
+      JSON.parse(await readFile(path.join(instanceRoot, "package.json"), "utf8")).version,
+      "0.1.0",
+    );
+    assert.equal(await readFile(path.join(instanceRoot, "obsolete.txt"), "utf8"), "old source");
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(instanceRoot, "wrangler.jsonc"), "utf8")),
+      oldConfig,
+    );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("private mode keeps first-owner registration available", async () => {
@@ -246,6 +402,15 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     assert.match(html, /自动识别并发布域名/);
     assert.match(html, /一键发布并自动绑定/);
     assert.match(html, /requestedStep === "domain"/);
+    assert.match(html, /requestedStep === "update"/);
+    assert.match(html, /检查与安装更新/);
+    assert.match(html, /\/api\/update\/check/);
+    assert.match(html, /\/api\/update\/install/);
+    assert.match(html, /更新前自动备份当前程序和实例配置/);
+    assert.match(html, /保留 R2 文件、D1 账号资料、域名与本机密钥/);
+    const browserScript = html.match(/<script>([\s\S]+)<\/script>/)?.[1];
+    assert.ok(browserScript);
+    assert.doesNotThrow(() => new Function(browserScript));
     assert.match(html, /这不一定是域名或 DNS 问题/);
     assert.match(html, /只有日志明确提示同名 CNAME 冲突时/);
     assert.doesNotMatch(html, /window\.confirm/);
@@ -398,4 +563,11 @@ test("setup can create or reuse a private R2 bucket and binds only a custom doma
   assert.match(source, /custom_domain: true/);
   assert.match(source, /config\.workers_dev = false/);
   assert.match(source, /config\.preview_urls = false/);
+  assert.match(source, /url\.pathname === "\/api\/update\/check"/);
+  assert.match(source, /url\.pathname === "\/api\/update\/install"/);
+  assert.match(source, /await applyReleaseTree/);
+  assert.match(source, /await rollbackReleaseTree/);
+  assert.match(source, /d1", "migrations", "apply", database, "--local"/);
+  assert.match(source, /d1", "migrations", "apply", database, "--remote"/);
+  assert.match(source, /localAddress && localHost/);
 });

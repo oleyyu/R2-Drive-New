@@ -391,6 +391,13 @@ async function openSetup() {
   await runProcess(process.execPath, [path.join(ROOT, "scripts", "setup.mjs")]);
 }
 
+async function openUpdater() {
+  await ensureDependencies();
+  await ensureSetupHelper();
+  await openBrowser(`${SETUP_URL}?step=update`);
+  console.log("\n✓ 已打开程序更新页面。检查版本不会修改任何文件；安装前会再次要求确认。");
+}
+
 function wranglerAuthFileCandidates() {
   const environment = process.env.CLOUDFLARE_API_ENVIRONMENT ?? "production";
   const filename = environment === "production" ? "default.toml" : `${environment}.toml`;
@@ -665,6 +672,7 @@ export function formatMenu(instance) {
     `1. 打开网盘【${status}】`,
     "2. 配置／重新配置",
     "3. 删除所有信息（本机 + 当前 Cloudflare R2 Drive）",
+    "4. 检查更新／一键升级",
     "0. 退出",
   ].join("\n");
 }
@@ -679,11 +687,12 @@ async function main() {
     while (true) {
       const instance = describeInstance(await readConfig());
       printMenu(instance);
-      const choice = (await prompt.question("\n请输入 1、2、3 或 0：")).trim();
+      const choice = (await prompt.question("\n请输入 1、2、3、4 或 0：")).trim();
       try {
         if (choice === "1") await openDrive(instance);
         else if (choice === "2") await openSetup();
         else if (choice === "3") await deleteEverything(instance, prompt);
+        else if (choice === "4") await openUpdater();
         else if (choice === "0") break;
         else console.log("\n请输入菜单中的数字。");
       } catch (error) {

@@ -944,6 +944,78 @@
         color: var(--ink);
       }
 
+      .update-summary {
+        width: min(760px, 100%);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+      }
+
+      .update-version-card {
+        padding: 20px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        background: white;
+      }
+
+      .update-version-card span,
+      .update-version-card strong,
+      .update-version-card small {
+        display: block;
+      }
+
+      .update-version-card span,
+      .update-version-card small {
+        color: var(--muted);
+      }
+
+      .update-version-card strong {
+        margin: 8px 0 5px;
+        font-size: 24px;
+      }
+
+      .update-version-card small {
+        line-height: 1.55;
+      }
+
+      .update-checklist {
+        width: min(760px, 100%);
+        display: grid;
+        gap: 10px;
+        margin: 18px 0;
+        padding: 18px 20px;
+        border-radius: var(--radius);
+        color: #435067;
+        background: var(--blue-pale);
+      }
+
+      .update-checklist span::before {
+        content: "✓";
+        margin-right: 9px;
+        color: var(--good);
+        font-weight: 900;
+      }
+
+      .update-confirm {
+        width: min(760px, 100%);
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .update-confirm input {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        margin-top: 1px;
+        accent-color: var(--blue);
+      }
+
       dialog {
         width: min(820px, calc(100% - 28px));
         max-height: min(720px, calc(100dvh - 28px));
@@ -1158,6 +1230,10 @@
           grid-template-columns: 1fr;
         }
 
+        .update-summary {
+          grid-template-columns: 1fr;
+        }
+
         .domain-choice .button {
           width: 100%;
           justify-self: stretch;
@@ -1203,6 +1279,10 @@
           <button class="nav-item" type="button" data-step="3">
             <span class="nav-icon">域</span>
             <span>域名发布</span>
+          </button>
+          <button class="nav-item" type="button" data-step="4">
+            <span class="nav-icon">新</span>
+            <span>程序更新</span>
           </button>
         </nav>
       </aside>
@@ -1832,6 +1912,96 @@
               </div>
             </footer>
           </section>
+
+          <section class="step-page" data-page="4">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>检查与安装更新</h2>
+                <p>先查看 GitHub 官方版本；确认后由这台电脑备份、升级数据库并重新发布。</p>
+              </header>
+
+              <div class="update-summary">
+                <div class="update-version-card">
+                  <span>这台电脑上的版本</span>
+                  <strong id="update-current-version">正在读取</strong>
+                  <small>网盘文件和账号资料不在程序目录中。</small>
+                </div>
+                <div class="update-version-card">
+                  <span>GitHub 最新正式版</span>
+                  <strong id="update-latest-version">尚未检查</strong>
+                  <small id="update-release-name">点击下方按钮获取官方 Release。</small>
+                </div>
+              </div>
+
+              <div class="update-checklist">
+                <span>更新前自动备份当前程序和实例配置</span>
+                <span>保留 R2 文件、D1 账号资料、域名与本机密钥</span>
+                <span>先运行完整检查，再迁移数据库和发布 Worker</span>
+                <span>新版检查失败时自动恢复本机旧版本</span>
+              </div>
+
+              <a
+                class="text-link external hidden"
+                id="update-release-link"
+                href="https://github.com/oleyyu/R2-Drive-New/releases"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看本次更新说明
+              </a>
+
+              <label class="update-confirm" for="update-confirm">
+                <input id="update-confirm" type="checkbox" />
+                <span>
+                  我确认现在可以更新。更新期间请不要关闭这个窗口；Cloudflare 官方授权若已过期，
+                  页面会提示我重新授权。
+                </span>
+              </label>
+
+              <div class="launch-progress" id="update-progress" aria-live="polite">
+                <div class="launch-progress-head">
+                  <span id="update-progress-message">点击“检查更新”开始</span>
+                  <span id="update-progress-percent">0%</span>
+                </div>
+                <div
+                  class="launch-progress-track"
+                  role="progressbar"
+                  aria-label="程序更新进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                  id="update-progress-track"
+                >
+                  <i class="launch-progress-bar" id="update-progress-bar"></i>
+                </div>
+                <div class="launch-stages" aria-hidden="true">
+                  <span class="launch-stage" data-update-stage="download">检查并下载</span>
+                  <span class="launch-stage" data-update-stage="prepare">备份并检查</span>
+                  <span class="launch-stage" data-update-stage="migrate">升级资料库</span>
+                  <span class="launch-stage" data-update-stage="deploy">重新发布</span>
+                </div>
+              </div>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large" id="check-update" type="button">
+                一键检查更新
+              </button>
+              <button class="button large hidden" id="install-update" type="button">
+                备份并安装最新版　›
+              </button>
+              <span class="status" id="update-status" role="status">尚未检查</span>
+              <div class="progress" aria-label="程序更新">
+                <span>程序更新</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot active"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
         </main>
       </section>
     </div>
@@ -1868,6 +2038,7 @@
         accounts: [],
         zones: [],
         configuredHostname: "",
+        updateInfo: null,
       };
 
       const helpUrls = [
@@ -1875,6 +2046,7 @@
         "https://developers.cloudflare.com/r2/buckets/create-buckets/",
         "https://developers.cloudflare.com/workers/development-testing/",
         "https://developers.cloudflare.com/workers/configuration/routing/custom-domains/",
+        "https://github.com/oleyyu/R2-Drive-New/releases",
       ];
 
       function setBusy(busy) {
@@ -1905,6 +2077,42 @@
       }
 
       const localStageOrder = ["starting", "compiling", "verifying", "ready"];
+      const updateStageOrder = ["download", "prepare", "migrate", "deploy"];
+
+      function updateStageIndex(stage) {
+        if (["checking", "downloading", "verifying", "available", "current"].includes(stage)) {
+          return 0;
+        }
+        if (["backup", "dependencies", "testing"].includes(stage)) return 1;
+        if (stage === "migrating") return 2;
+        if (["deploying", "ready"].includes(stage)) return 3;
+        return 0;
+      }
+
+      function renderUpdateProgress(progress, errorMessage = "") {
+        const value = progress || {
+          percent: 0,
+          stage: "checking",
+          message: "点击“检查更新”开始",
+        };
+        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
+        const isError = value.stage === "error" || Boolean(errorMessage);
+        const message = errorMessage || value.message || "正在准备更新";
+        byId("update-progress").classList.toggle("error", isError);
+        byId("update-progress-message").textContent = message;
+        byId("update-progress-percent").textContent = `${Math.round(percent)}%`;
+        byId("update-progress-bar").style.width = `${percent}%`;
+        byId("update-progress-track").setAttribute(
+          "aria-valuenow",
+          String(Math.round(percent)),
+        );
+        const activeIndex = updateStageIndex(value.stage);
+        for (const stage of document.querySelectorAll("[data-update-stage]")) {
+          const index = updateStageOrder.indexOf(stage.dataset.updateStage);
+          stage.classList.toggle("done", !isError && index < activeIndex);
+          stage.classList.toggle("active", index === activeIndex);
+        }
+      }
 
       function renderLocalProgress(progress, errorMessage = "") {
         const value = progress || {
@@ -2071,7 +2279,7 @@
             setStatus(byId("ready-status"), "bad", "请先完成账号和 R2 准备");
             index = 0;
           }
-          if (index >= 2 && !state.resourcesReady) {
+          if (index >= 2 && index !== 4 && !state.resourcesReady) {
             setStatus(byId("storage-status"), "bad", "请先连接 R2 存储");
             index = 1;
           }
@@ -2084,7 +2292,13 @@
           button.classList.toggle("active", Number(button.dataset.step) === index);
         }
         byId("top-next").textContent =
-          index === 3 ? "完成设置　›" : "继续设置　›";
+          index === 3
+            ? "完成设置　›"
+            : index === 4
+              ? state.updateInfo?.available
+                ? "安装最新版　›"
+                : "检查更新　›"
+              : "继续设置　›";
         document.querySelector(".content").scrollTop = 0;
         if (index === 3 && state.resourcesReady && !state.domainLookupStarted) {
           setTimeout(() => detectDomains(), 0);
@@ -2340,6 +2554,9 @@
 
       function hydrate(status) {
         const config = status.config || {};
+        byId("update-current-version").textContent = status.version
+          ? `v${status.version}`
+          : "无法读取";
         byId("app-name").value = config.appName || "我的网盘";
         byId("worker-name").value = config.workerName || "r2-drive";
         byId("account-id").value = config.accountId || "";
@@ -2507,6 +2724,102 @@
       }
 
       byId("connect-storage").addEventListener("click", connectStorage);
+
+      async function checkUpdate() {
+        renderUpdateProgress({
+          percent: 3,
+          stage: "checking",
+          message: "正在连接 GitHub Releases",
+        });
+        try {
+          await startJob("/api/update/check", {}, {
+            statusElement: byId("update-status"),
+            runningText: "正在检查官方版本",
+            doneText: "版本检查完成",
+            onProgress: (progress) => {
+              if (progress) renderUpdateProgress(progress);
+            },
+            onDone: (result) => {
+              state.updateInfo = result;
+              byId("update-current-version").textContent = `v${result.currentVersion}`;
+              byId("update-latest-version").textContent = `v${result.latestVersion}`;
+              byId("update-release-name").textContent =
+                result.releaseName || "R2 Drive 正式版";
+              byId("update-release-link").href = result.releaseUrl;
+              byId("update-release-link").classList.remove("hidden");
+              byId("install-update").classList.toggle("hidden", !result.available);
+              byId("check-update").textContent = "重新检查";
+              byId("top-next").textContent = result.available
+                ? "安装最新版　›"
+                : "检查更新　›";
+              setStatus(
+                byId("update-status"),
+                "ok",
+                result.available ? `发现 v${result.latestVersion}` : "当前已经是最新版",
+              );
+            },
+            onError: (error, current) => {
+              renderUpdateProgress(current?.progress, error.message);
+            },
+          });
+        } catch {
+          byId("log-dialog").showModal();
+        }
+      }
+
+      async function installUpdate() {
+        if (!state.updateInfo?.available) {
+          await checkUpdate();
+          return;
+        }
+        if (!byId("update-confirm").checked) {
+          setStatus(byId("update-status"), "bad", "请先勾选更新确认");
+          byId("update-confirm").focus();
+          return;
+        }
+        try {
+          await startJob(
+            "/api/update/install",
+            { confirm: true, version: state.updateInfo.latestVersion },
+            {
+              statusElement: byId("update-status"),
+              runningText: "正在备份并安装",
+              doneText: "更新安装完成",
+              onProgress: (progress) => {
+                if (progress) renderUpdateProgress(progress);
+              },
+              onDone: (result) => {
+                state.updateInfo = {
+                  ...state.updateInfo,
+                  currentVersion: result.version,
+                  latestVersion: result.version,
+                  available: false,
+                };
+                byId("update-current-version").textContent = `v${result.version}`;
+                byId("update-latest-version").textContent = `v${result.version}`;
+                byId("install-update").classList.add("hidden");
+                byId("top-next").textContent = "检查更新　›";
+                setStatus(
+                  byId("update-status"),
+                  "ok",
+                  result.deployed ? "新版已发布到域名网盘" : "本机程序已更新",
+                );
+                if (result.url) {
+                  window.open(result.url, "_blank", "noopener,noreferrer");
+                }
+              },
+              onError: (error, current) => {
+                renderUpdateProgress(current?.progress, error.message);
+              },
+            },
+          );
+        } catch {
+          byId("log-dialog").showModal();
+        }
+      }
+
+      byId("check-update").addEventListener("click", checkUpdate);
+      byId("install-update").addEventListener("click", installUpdate);
 
       byId("create-r2").addEventListener("click", async () => {
         if (!state.accountConnected || !byId("account-id").value.trim()) {
@@ -2679,6 +2992,10 @@
         if (state.activeStep === 0) continueFromReady();
         else if (state.activeStep === 1) connectStorage();
         else if (state.activeStep === 2) showStep(3, true);
+        else if (state.activeStep === 4) {
+          if (state.updateInfo?.available) installUpdate();
+          else checkUpdate();
+        }
         else if (state.domainChoice === "yes") byId("publish-drive").click();
         else byId("local-only-finish").click();
       });
@@ -2699,6 +3016,9 @@
             if (!state.resourcesReady) {
               setStatus(byId("storage-status"), "bad", "请先连接 R2 存储，再绑定域名");
             }
+          } else if (requestedStep === "update") {
+            showStep(4, true);
+            await checkUpdate();
           }
         })
         .catch((error) => {

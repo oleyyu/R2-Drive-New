@@ -2,6 +2,7 @@ import { ensureDatabase } from "@/db/runtime";
 import { requireAdmin } from "@/lib/auth";
 import { appConfig, directR2Configured } from "@/lib/config";
 import { apiError, json } from "@/lib/http";
+import { CURRENT_VERSION } from "@/lib/update-check";
 
 export async function GET(request: Request): Promise<Response> {
   try {
@@ -47,6 +48,7 @@ export async function GET(request: Request): Promise<Response> {
         activeUploads: Number((activeUploads.results[0] as { value?: number })?.value ?? 0),
       },
       runtime: {
+        appVersion: CURRENT_VERSION,
         directUpload: config.uploadMode !== "proxy" && directR2Configured(),
         uploadMode: config.uploadMode,
         downloadMode: config.downloadMode,

@@ -42,6 +42,9 @@ test("landing and product source contain the expected real surfaces", async () =
   assert.match(drive, /公开分享尚未开启/);
   assert.match(admin, /个人网络优化清单/);
   assert.match(admin, /绑定域名/);
+  assert.match(admin, /一键检查更新/);
+  assert.match(admin, /127\.0\.0\.1:8788\/\?step=update/);
+  assert.match(admin, /\/api\/admin\/update/);
   assert.match(layout, /R2 Drive/);
   assert.doesNotMatch(home + layout, /SkeletonPreview|Your site is taking shape/);
 });

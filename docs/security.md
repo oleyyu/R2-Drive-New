@@ -80,3 +80,7 @@ npm outdated
 ```
 
 不要无条件运行 `npm audit fix --force`；它可能跨主版本破坏 Cloudflare 构建链。对每个报告确认是否进入生产 bundle、是否可利用，再升级。
+
+管理页的一键检查只读取 `oleyyu/R2-Drive-New` 的 GitHub Latest Release，不接收下载地址参数，也不会取得本机 Cloudflare 凭据。实际安装仅由回环地址上的本机助手执行。更新器限制元数据和压缩包体积，只接受 GitHub HTTPS 地址，拒绝符号链接、路径穿越和受保护目录，并校验项目包名、Release 版本、更新清单与必要文件。
+
+更新会保留 `.git`、`.dev.vars`、Wrangler 缓存、依赖缓存、当前 `wrangler.jsonc` 实例资源和本机 CORS。受管理源码先复制到临时备份，完整检查失败时自动恢复。GitHub 账号或正式 Release 本身仍属于供应链信任根；高风险环境可禁用自动安装，改为人工审阅 tag 后按 README 手动升级。
