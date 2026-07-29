@@ -20,7 +20,7 @@ if errorlevel 1 goto node_missing
 
 for /f "delims=" %%V in ('node --version') do set "NODE_VERSION=%%V"
 echo Node.js %NODE_VERSION% 已就绪。
-echo 请选择打开网盘、配置、更新，或删除当前实例。
+echo 请选择打开网盘、配置、更新，或一键卸载当前实例。
 echo.
 node scripts\launcher.mjs
 if errorlevel 1 goto launcher_failed

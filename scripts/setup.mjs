@@ -41,7 +41,6 @@ const LOCAL_PORT =
     : 3000;
 const LOCAL_ORIGIN = `http://localhost:${LOCAL_PORT}`;
 const LOCAL_ENTRY_URL = `${LOCAL_ORIGIN}/start`;
-const LOCAL_START_TIMEOUT_MS = 120_000;
 const CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4";
 const csrfToken = randomBytes(32).toString("hex");
 const cloudflareDispatcher = new EnvHttpProxyAgent();
@@ -775,6 +774,120 @@ async function configureCloudflare(job, body) {
   };
 }
 
+async function enableUploadAcceleration(job) {
+  const config = await readConfig();
+  const accountId = assertAccountId(
+    String(config.account_id ?? config.vars?.R2_ACCOUNT_ID ?? "").trim(),
+  );
+  const bucket = assertName(
+    String(config.r2_buckets?.[0]?.bucket_name ?? config.vars?.R2_BUCKET_NAME ?? "").trim(),
+    "R2 桶名称",
+    3,
+  );
+  const customHostname =
+    config.routes?.find((route) => route?.custom_domain)?.pattern ?? "";
+  if (!customHostname) {
+    throw new Error("请先完成域名绑定，再开启上传加速。");
+  }
+  const accountEnvironment = { CLOUDFLARE_ACCOUNT_ID: accountId };
+
+  setJobProgress(job, 8, "checking", "正在确认 Wrangler 登录和当前网盘");
+  const account = await checkWranglerAccount(job);
+  if (!account.accounts.some((item) => item.id === accountId)) {
+    throw new Error("当前 Wrangler 登录不属于这个网盘的 Cloudflare 账号。");
+  }
+  await runWrangler(
+    job,
+    ["r2", "bucket", "info", bucket, "--json", "--config", CONFIG_PATH],
+    {
+      label: `确认 R2 存储桶 ${bucket}`,
+      env: accountEnvironment,
+    },
+  );
+
+  setJobProgress(job, 38, "local-uploads", "正在开启就近写入");
+  await runWrangler(
+    job,
+    [
+      "r2",
+      "bucket",
+      "local-uploads",
+      "enable",
+      bucket,
+      "--force",
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      label: `wrangler r2 bucket local-uploads enable ${bucket}`,
+      env: accountEnvironment,
+    },
+  );
+
+  setJobProgress(job, 64, "cors", "正在同步浏览器上传规则");
+  await runWrangler(
+    job,
+    [
+      "r2",
+      "bucket",
+      "cors",
+      "set",
+      bucket,
+      "--file",
+      CORS_PATH,
+      "--force",
+      "--config",
+      CONFIG_PATH,
+    ],
+    {
+      label: `wrangler r2 bucket cors set ${bucket}`,
+      env: accountEnvironment,
+    },
+  );
+
+  setJobProgress(job, 84, "verifying", "正在复核 Cloudflare 配置");
+  const [localUploadsOutput, secretsOutput] = await Promise.all([
+    runWrangler(
+      job,
+      ["r2", "bucket", "local-uploads", "get", bucket, "--config", CONFIG_PATH],
+      {
+        label: `复核 ${bucket} 的 Local Uploads`,
+        env: accountEnvironment,
+      },
+    ),
+    runWrangler(
+      job,
+      ["secret", "list", "--format", "json", "--config", CONFIG_PATH],
+      { label: "检查现有直传配置" },
+    ),
+  ]);
+  if (!/local uploads are enabled/i.test(localUploadsOutput)) {
+    throw new Error("Wrangler 没有确认 Local Uploads 已开启，请稍后重试。");
+  }
+  const secrets = parseWranglerJson(secretsOutput, "Wrangler Secret");
+  const secretNames = new Set(
+    Array.isArray(secrets)
+      ? secrets.map((secret) => secret?.name).filter((name) => typeof name === "string")
+      : [],
+  );
+  const directUploadReady =
+    secretNames.has("R2_ACCESS_KEY_ID") && secretNames.has("R2_SECRET_ACCESS_KEY");
+
+  setJobProgress(job, 100, "done", "上传加速已经开启");
+  addLog(
+    job,
+    directUploadReady
+      ? "\n✓ Local Uploads 已开启；已有 R2 直传凭据，网盘会优先直传并自动回退。\n"
+      : "\n✓ Local Uploads 已开启；网盘会使用流式分片和就近 R2 写入。\n",
+  );
+  return {
+    enabled: true,
+    directUploadReady,
+    bucket,
+    url: `https://${customHostname}/start`,
+  };
+}
+
 async function writeLocalSecrets(accessKeyId, secretAccessKey) {
   validateSecretPair(accessKeyId, secretAccessKey);
   await writeFile(
@@ -894,148 +1007,6 @@ async function inspectLocalDrive(timeoutMs = 2_000) {
     }
     return { state: "offline", status: null, message: "本地端口尚未开始监听" };
   }
-}
-
-async function startLocalDrive(job) {
-  setJobProgress(job, 5, "checking", "正在检查本地端口");
-  let initialHealth = await inspectLocalDrive();
-  if (initialHealth.state === "ready") {
-    localDevUrl = LOCAL_ENTRY_URL;
-    setJobProgress(job, 100, "ready", "网盘已经可以打开");
-    addLog(job, "\n✓ 本地网盘已经在运行。\n");
-    return { url: localDevUrl, alreadyRunning: true };
-  }
-
-  if (initialHealth.state === "error" || initialHealth.state === "starting") {
-    if (initialHealth.state === "error") {
-      addLog(
-        job,
-        `\n旧网盘账号页面诊断：HTTP ${initialHealth.status}，${initialHealth.message}\n`,
-      );
-    } else {
-      addLog(job, `\n${LOCAL_PORT} 端口已有程序，但账号页面在检查时间内没有响应。\n`);
-    }
-    setJobProgress(job, 10, "stopping", "检测到旧网盘，正在自动关闭");
-    const cleanup = await stopPreviousLocalDrive(job);
-    if (cleanup.occupiedByAnotherApp) {
-      throw new Error(
-        `本地地址被其他软件占用。为了保护你的其他程序，安装助手没有强制关闭它。请关闭占用 ${LOCAL_PORT} 端口的软件后重试。`,
-      );
-    }
-    if (!cleanup.stopped) {
-      throw new Error(
-        "检测到旧网盘异常，但无法确认对应进程。请关闭以前打开的 R2 Drive 终端窗口后重试。",
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    initialHealth = await inspectLocalDrive(800);
-    if (initialHealth.state !== "offline") {
-      throw new Error("旧网盘已经关闭，但本地地址还没有释放。请稍等几秒后重试。");
-    }
-  }
-
-  if (localDevProcess && localDevProcess.exitCode === null) {
-    const previousProcess = localDevProcess;
-    previousProcess.kill("SIGTERM");
-    if (!(await waitForProcessExit(previousProcess.pid, 1_500))) {
-      previousProcess.kill("SIGKILL");
-      await waitForProcessExit(previousProcess.pid, 1_000);
-    }
-    if (localDevProcess === previousProcess) localDevProcess = null;
-  }
-
-  setJobProgress(job, 16, "starting", "正在启动本地服务");
-  addLog(job, "\n正在启动本地网盘，第一次编译可能需要几十秒。\n");
-  const child = spawn(
-    executable("npm"),
-    ["run", "dev", "--", "--port", String(LOCAL_PORT), "--hostname", "localhost"],
-    {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        NO_COLOR: "1",
-        WRANGLER_SEND_METRICS: "false",
-        WRANGLER_LOG_PATH: path.join(ROOT, ".wrangler", "setup-local.log"),
-      },
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  localDevProcess = child;
-  let childFailure = null;
-  let serverAnnounced = false;
-  let consecutivePageErrors = 0;
-  const appendLocalOutput = (chunk) => {
-    const output = cleanOutput(chunk);
-    addLog(job, output);
-    if (output.includes("[optimizer]") || output.includes("transforming")) {
-      setJobProgress(job, 48, "compiling", "正在编译网盘页面");
-    }
-    if (output.includes("Local:")) {
-      serverAnnounced = true;
-      setJobProgress(job, 58, "verifying", "本地服务已启动，正在检查账号页面");
-    }
-  };
-  child.stdout.on("data", appendLocalOutput);
-  child.stderr.on("data", appendLocalOutput);
-  child.on("error", (error) => {
-    childFailure = error;
-    addLog(job, `\n本地网盘进程错误：${error.message}\n`);
-  });
-  child.on("close", (code) => {
-    addLog(job, `\n本地网盘已停止（状态码 ${code ?? "unknown"}）。\n`);
-    if (localDevProcess === child) {
-      localDevProcess = null;
-      localDevUrl = null;
-    }
-  });
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < LOCAL_START_TIMEOUT_MS) {
-    if (childFailure) {
-      throw new Error(`无法启动本地网盘进程：${childFailure.message}`);
-    }
-    if (child.exitCode !== null) {
-      throw new Error(`本地网盘启动失败，进程状态码为 ${child.exitCode}。请查看处理日志。`);
-    }
-
-    const health = await inspectLocalDrive();
-    if (health.state === "ready") {
-      localDevUrl = LOCAL_ENTRY_URL;
-      setJobProgress(job, 100, "ready", "账号页面已经准备好，正在打开");
-      addLog(job, `\n✓ 本地网盘已就绪：${localDevUrl}\n`);
-      return { url: localDevUrl, alreadyRunning: false };
-    }
-    if (health.state === "error") {
-      consecutivePageErrors += 1;
-      if (consecutivePageErrors >= 2) {
-        addLog(job, `\n账号页面诊断：HTTP ${health.status}，${health.message}\n`);
-        child.kill("SIGTERM");
-        throw new Error(
-          "本地服务已经启动，但账号页面没有正常显示。请点击“查看错误详情”，然后重新启动。",
-        );
-      }
-    } else {
-      consecutivePageErrors = 0;
-    }
-
-    const elapsedRatio = Math.min(1, (Date.now() - startedAt) / LOCAL_START_TIMEOUT_MS);
-    const percent = 24 + elapsedRatio * 66;
-    setJobProgress(
-      job,
-      percent,
-      health.state === "starting" || serverAnnounced ? "compiling" : "starting",
-      health.state === "starting" || serverAnnounced
-        ? "正在编译并检查账号页面"
-        : "正在等待本地服务响应",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 450));
-  }
-
-  child.kill("SIGTERM");
-  throw new Error(
-    `本地网盘启动超过 ${Math.round(LOCAL_START_TIMEOUT_MS / 1000)} 秒。请查看处理日志，关闭占用 ${LOCAL_PORT} 端口的旧程序后重试。`,
-  );
 }
 
 async function fileExists(filePath) {
@@ -1557,6 +1528,14 @@ async function route(request, response) {
     );
     return;
   }
+  if (request.method === "POST" && url.pathname === "/api/upload-acceleration/enable") {
+    sendJson(
+      response,
+      202,
+      startJob("upload-acceleration", enableUploadAcceleration),
+    );
+    return;
+  }
   if (request.method === "POST" && url.pathname === "/api/local-secrets") {
     const body = await readJson(request);
     await writeLocalSecrets(body.accessKeyId, body.secretAccessKey);
@@ -1564,11 +1543,9 @@ async function route(request, response) {
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/local/start") {
-    sendJson(
-      response,
-      202,
-      startJob("local-start", startLocalDrive),
-    );
+    sendJson(response, 400, {
+      error: "R2 Drive 必须先绑定 Active 域名；不再提供无域名本机版。",
+    });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/zones/list") {

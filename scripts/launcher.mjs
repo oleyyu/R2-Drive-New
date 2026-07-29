@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,14 +12,20 @@ import { findD1DatabaseByName, parseWranglerJson } from "./wrangler-output.mjs";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const CONFIG_PATH = path.join(ROOT, "wrangler.jsonc");
 const DEFAULT_CONFIG_PATH = path.join(ROOT, "config", "wrangler.default.jsonc");
-const LOCAL_DRIVE_URL = "http://localhost:3000/start";
 const SETUP_URL = "http://127.0.0.1:8788/";
 const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/i;
 const D1_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CLOUDFLARE_API_MAX_ATTEMPTS = 8;
+// A "* * * * *" trigger fires at the next minute boundary, so one round has to
+// tolerate roughly a minute of waiting before the helper runs at all.
+const PURGE_ROUND_TIMEOUT_MS = 240_000;
+const MAX_PURGE_ROUNDS = 10;
+const MAX_UPLOADS_PER_ROUND = 500;
 let dependenciesChecked = false;
 let cloudflareDispatcher;
 let cloudflareFetch;
+let cloudflareRetryNoticeShown = false;
 let setupHelperProcess;
 
 function executable(name) {
@@ -64,9 +71,7 @@ export function describeInstance(config) {
 }
 
 export function driveEntryUrl(instance) {
-  return instance.customHostname
-    ? `https://${instance.customHostname}/start`
-    : LOCAL_DRIVE_URL;
+  return instance.customHostname ? `https://${instance.customHostname}/start` : "";
 }
 
 function runProcess(program, args, options = {}) {
@@ -136,19 +141,6 @@ async function pageContains(url, marker, timeoutMs = 2_000) {
   } catch {
     return false;
   }
-}
-
-async function waitForDrive(child, timeoutMs = 120_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (child.exitCode !== null) {
-      throw new Error(`网盘启动失败，进程状态码为 ${child.exitCode}。`);
-    }
-    if (await pageContains(LOCAL_DRIVE_URL, "R2 Drive")) return;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  child.kill("SIGTERM");
-  throw new Error("网盘启动超过两分钟。请重新打开启动器后再试。");
 }
 
 async function ensureSetupHelper() {
@@ -344,39 +336,24 @@ async function openDrive(instance) {
     console.log("\n尚未完成配置。请先选择 2，跟着安装助手完成设置。");
     return;
   }
-  if (instance.customHostname) {
-    const url = driveEntryUrl(instance);
-    console.log(`\n正在检查域名网盘 ${instance.customHostname}…`);
-    if (!(await pageContains(url, "R2 Drive", 15_000))) {
-      throw new Error(
-        `域名网盘 ${instance.customHostname} 暂时没有正常响应。请先选择 2 查看域名发布状态。`,
-      );
-    }
+  if (!instance.customHostname) {
+    console.log("\n当前实例没有绑定域名，因此不能发布或使用 R2 Drive。");
+    await ensureDependencies();
     await ensureSetupHelper();
-    await openBrowser(url);
-    console.log("\n✓ 已打开域名网盘。主人账号和密码只保存在这一份线上网盘中。");
+    await openBrowser(`${SETUP_URL}?step=domain`);
+    console.log("✓ 已打开域名配置页；没有付费域名时可按 DPDNS 免费域名教程继续。");
     return;
   }
-  if (await pageContains(LOCAL_DRIVE_URL, "R2 Drive")) {
-    await ensureSetupHelper();
-    await openBrowser(LOCAL_DRIVE_URL);
-    console.log("\n✓ 网盘已经在运行，已为你打开。");
-    return;
+  const url = driveEntryUrl(instance);
+  console.log(`\n正在检查域名网盘 ${instance.customHostname}…`);
+  if (!(await pageContains(url, "R2 Drive", 15_000))) {
+    throw new Error(
+      `域名网盘 ${instance.customHostname} 暂时没有正常响应。请先选择 2 查看域名发布状态。`,
+    );
   }
-
-  await stopOwnedService(3000, "drive");
-  await ensureDependencies();
   await ensureSetupHelper();
-  console.log("\n正在启动网盘。第一次编译可能需要几十秒，请保留这个窗口…\n");
-  const child = spawn(
-    executable("npm"),
-    ["run", "dev", "--", "--port", "3000", "--hostname", "localhost"],
-    { cwd: ROOT, env: process.env, shell: false, stdio: "inherit", windowsHide: true },
-  );
-  await waitForDrive(child);
-  await openBrowser(LOCAL_DRIVE_URL);
-  console.log("\n✓ 网盘已打开。关闭这个终端或按 Ctrl+C 即可停止网盘。\n");
-  await new Promise((resolve) => child.once("close", resolve));
+  await openBrowser(url);
+  console.log("\n✓ 已打开域名网盘。主人账号和密码只保存在这一份线上网盘中。");
 }
 
 async function openSetup() {
@@ -460,6 +437,21 @@ async function initializeCloudflareFetch() {
   cloudflareDispatcher = new undici.EnvHttpProxyAgent();
 }
 
+function cloudflareRetryDelay(response, attempt) {
+  const retryAfter = response.headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(Math.max(seconds * 1_000, 1_000), 60_000);
+    }
+    const date = Date.parse(retryAfter);
+    if (Number.isFinite(date)) {
+      return Math.min(Math.max(date - Date.now(), 1_000), 60_000);
+    }
+  }
+  return Math.min(2 ** attempt * 1_000, 30_000);
+}
+
 async function cloudflareApi(pathname, options = {}) {
   await initializeCloudflareFetch();
   const url = new URL(`https://api.cloudflare.com/client/v4${pathname}`);
@@ -468,15 +460,34 @@ async function cloudflareApi(pathname, options = {}) {
       url.searchParams.set(key, String(value));
     }
   }
-  const response = await cloudflareFetch(url, {
-    method: options.method ?? "GET",
-    headers: await cloudflareAuthHeaders(),
-    dispatcher: cloudflareDispatcher,
-    signal: AbortSignal.timeout(30_000),
-  });
-  const payload = await response.json().catch(() => null);
-  if (response.status === 404) return { missing: true, result: null };
-  if (!response.ok || !payload?.success) {
+  const headers = await cloudflareAuthHeaders();
+  for (let attempt = 0; attempt < CLOUDFLARE_API_MAX_ATTEMPTS; attempt += 1) {
+    const response = await cloudflareFetch(url, {
+      method: options.method ?? "GET",
+      headers,
+      dispatcher: cloudflareDispatcher,
+      signal: AbortSignal.timeout(30_000),
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.status === 404) return { missing: true, result: null };
+    if (response.ok && payload?.success) return { missing: false, ...payload };
+    const retryable =
+      response.status === 429 ||
+      response.status === 500 ||
+      response.status === 502 ||
+      response.status === 503 ||
+      response.status === 504;
+    if (retryable && attempt + 1 < CLOUDFLARE_API_MAX_ATTEMPTS) {
+      const delayMs = cloudflareRetryDelay(response, attempt);
+      if (!cloudflareRetryNoticeShown) {
+        cloudflareRetryNoticeShown = true;
+        console.log(
+          `\nCloudflare 正在限流或暂时繁忙，将等待 ${Math.ceil(delayMs / 1_000)} 秒后继续…`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
     const message = Array.isArray(payload?.errors)
       ? payload.errors.map((item) => item?.message).filter(Boolean).join("；")
       : "";
@@ -486,7 +497,7 @@ async function cloudflareApi(pathname, options = {}) {
         : `Cloudflare 删除失败（HTTP ${response.status}）。`,
     );
   }
-  return { missing: false, ...payload };
+  throw new Error("Cloudflare 删除失败：重试次数已用完。");
 }
 
 export function encodeR2ObjectKey(key) {
@@ -543,26 +554,204 @@ function isMissingCloudflareResource(output) {
   return /does not exist|not found|NoSuchBucket|code:\s*1000[67]/i.test(output);
 }
 
-async function deleteR2(instance) {
-  console.log(`\n[1/3] 正在清空并删除 R2 存储桶 ${instance.r2Name}…`);
+function isR2BucketNotEmpty(output) {
+  return /code:\s*10008|bucket.+not empty|bucket.+isn.t empty/i.test(output);
+}
+
+async function pendingMultipartUploads(instance) {
+  const result = await runWrangler(
+    [
+      "d1",
+      "execute",
+      instance.d1Name,
+      "--remote",
+      "--command",
+      "SELECT upload_id, storage_key FROM multipart_uploads",
+      "--json",
+      "--config",
+      CONFIG_PATH,
+    ],
+    instance,
+  );
+  if (result.code !== 0) {
+    if (/no such table|does not exist|not found/i.test(result.output)) return [];
+    throw new Error(`无法检查残留分片上传：${result.output.trim().slice(-500)}`);
+  }
+  const payload = parseWranglerJson(result.output, "Wrangler D1");
+  const rows = Array.isArray(payload)
+    ? payload.flatMap((entry) => (Array.isArray(entry?.results) ? entry.results : []))
+    : [];
+  const uploads = rows
+    .map((row) => ({
+      uploadId: typeof row?.upload_id === "string" ? row.upload_id : "",
+      storageKey: typeof row?.storage_key === "string" ? row.storage_key : "",
+    }))
+    .filter((upload) => upload.uploadId && upload.storageKey);
+  return [
+    ...new Map(
+      uploads.map((upload) => [`${upload.storageKey}\u0000${upload.uploadId}`, upload]),
+    ).values(),
+  ];
+}
+
+async function listIncompleteMultipartUploads(instance) {
+  const listed = await cloudflareApi(
+    `/accounts/${instance.accountId}/r2/buckets/${encodeURIComponent(instance.r2Name)}/uploads`,
+  );
+  if (listed.missing) return [];
+  const uploads = (Array.isArray(listed.result) ? listed.result : [])
+    .map((item) => ({
+      storageKey: typeof item?.key === "string" ? item.key : "",
+      uploadId: typeof item?.uploadId === "string" ? item.uploadId : "",
+    }))
+    .filter((upload) => upload.storageKey && upload.uploadId);
+  return [
+    ...new Map(
+      uploads.map((upload) => [`${upload.storageKey}\u0000${upload.uploadId}`, upload]),
+    ).values(),
+  ];
+}
+
+// R2 lists what is really in the bucket; the app's own table is the fallback
+// for when that endpoint is unavailable.
+async function leftoverMultipartUploads(instance) {
+  try {
+    return await listIncompleteMultipartUploads(instance);
+  } catch {
+    return await pendingMultipartUploads(instance);
+  }
+}
+
+async function waitForMultipartUploadsToDrain(instance, startedAt) {
+  let remaining = await leftoverMultipartUploads(instance);
+  let progressWidth = 0;
+  while (remaining.length > 0 && Date.now() - startedAt < PURGE_ROUND_TIMEOUT_MS) {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    const waited = Math.round((Date.now() - startedAt) / 1000);
+    const line = `清除 all：等待云端清理残留分片…（已等待 ${waited} 秒）`;
+    progressWidth = Math.max(progressWidth, line.length);
+    process.stdout.write(`\r${line}`);
+    remaining = await leftoverMultipartUploads(instance);
+  }
+  if (progressWidth > 0) process.stdout.write(`\r${" ".repeat(progressWidth)}\r`);
+  return remaining;
+}
+
+// The temporary helper runs from a cron trigger entirely at Cloudflare's edge.
+// This avoids `wrangler dev --remote`, whose local preview connection cannot
+// start on proxy-only networks.
+async function abortMultipartUploadsOnEdge(instance, uploads) {
+  const workspace = await mkdtemp(path.join(tmpdir(), "r2-drive-purge-"));
+  const configPath = path.join(workspace, "wrangler.jsonc");
+  const helperPath = path.join(workspace, "uninstall-worker.mjs");
+  const workerName = `r2-drive-purge-${randomBytes(6).toString("hex")}`;
+
+  try {
+    await Promise.all([
+      writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            name: workerName,
+            main: helperPath,
+            compatibility_date: "2025-01-01",
+            account_id: instance.accountId,
+            workers_dev: false,
+            preview_urls: false,
+            triggers: { crons: ["* * * * *"] },
+            vars: { PURGE_UPLOADS: JSON.stringify(uploads) },
+            r2_buckets: [{ binding: "FILES", bucket_name: instance.r2Name }],
+          },
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        helperPath,
+        await readFile(path.join(ROOT, "scripts", "uninstall-worker.mjs"), "utf8"),
+        { mode: 0o600 },
+      ),
+    ]);
+
+    const deployed = await runWrangler(["deploy", "--config", configPath], instance);
+    if (deployed.code !== 0) {
+      throw new Error(
+        `Cloudflare 清理助手部署失败：${deployed.output.trim().slice(-500)}`,
+      );
+    }
+    return await waitForMultipartUploadsToDrain(instance, Date.now());
+  } finally {
+    const removed = await runWrangler(
+      ["delete", workerName, "--force", "--config", configPath],
+      instance,
+    );
+    if (removed.code !== 0 && !isMissingCloudflareResource(removed.output)) {
+      console.log(
+        `⚠ 临时清理助手 ${workerName} 没能自动删除，请在 Cloudflare 控制台的 Workers 列表里手动删除它。`,
+      );
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+async function purgeAllR2Data(instance) {
+  let remaining = await leftoverMultipartUploads(instance);
+  if (remaining.length === 0) return;
+
+  console.log(
+    `检测到 R2 桶仍非空，正在执行清除 all（${remaining.length} 个残留分片上传）…`,
+  );
+  console.log(
+    "云端清理由定时任务触发，第一次通常需要等待约 1 分钟，请不要关闭窗口。",
+  );
+
+  for (let round = 0; round < MAX_PURGE_ROUNDS && remaining.length > 0; round += 1) {
+    const before = remaining.length;
+    remaining = await abortMultipartUploadsOnEdge(
+      instance,
+      remaining.slice(0, MAX_UPLOADS_PER_ROUND),
+    );
+    if (remaining.length >= before) break;
+  }
+
+  if (remaining.length > 0) {
+    throw new Error(
+      `Cloudflare 仍有 ${remaining.length} 个残留分片上传没有清除，R2 存储桶暂时无法删除。请稍后重新选择相同操作；若一直失败，可在 Cloudflare 控制台手动删除存储桶 ${instance.r2Name}。`,
+    );
+  }
+  console.log("✓ 清除 all 完成：残留分片上传已全部 abort。");
+}
+
+async function deleteR2(instance, alreadyMissing = false) {
+  console.log(`[2/3] 正在清空并删除 R2 存储桶 ${instance.r2Name}…`);
+  if (alreadyMissing) {
+    console.log("✓ R2 存储桶已经不存在。");
+    return;
+  }
   const emptied = await emptyR2Bucket(instance);
   if (emptied.deleted > 0) process.stdout.write("\n");
   if (emptied.missing) {
     console.log("✓ R2 存储桶已经不存在。");
     return;
   }
-  const result = await runWrangler(
+  let result = await runWrangler(
     ["r2", "bucket", "delete", instance.r2Name],
     instance,
   );
+  if (result.code !== 0 && isR2BucketNotEmpty(result.output)) {
+    await purgeAllR2Data(instance);
+    const finalEmpty = await emptyR2Bucket(instance);
+    if (finalEmpty.deleted > 0) process.stdout.write("\n");
+    result = await runWrangler(["r2", "bucket", "delete", instance.r2Name], instance);
+  }
   if (result.code !== 0 && !isMissingCloudflareResource(result.output)) {
     throw new Error(`R2 存储桶未能删除：${result.output.trim().slice(-500)}`);
   }
   console.log("✓ R2 存储桶及其中所有文件已删除。");
 }
 
-async function deleteD1(instance) {
-  console.log(`[2/3] 正在删除资料数据库 ${instance.d1Name}…`);
+async function inspectD1ForUninstall(instance) {
   const listed = await runWrangler(["d1", "list", "--json"], instance);
   if (listed.code !== 0) {
     throw new Error(`无法检查资料数据库：${listed.output.trim().slice(-500)}`);
@@ -572,13 +761,36 @@ async function deleteD1(instance) {
     instance.d1Name,
   );
   if (!existing) {
-    console.log("✓ 资料数据库已经不存在。");
-    return;
+    return null;
   }
   if (existing.id !== instance.d1Id) {
     throw new Error(
       `同名资料数据库的编号与本实例不一致。为避免误删，已停止；没有删除 ${instance.d1Name}。`,
     );
+  }
+  return existing;
+}
+
+async function preflightUninstall(instance) {
+  console.log("\n正在核对当前 Cloudflare 账号和卸载目标，不会在这一步删除数据…");
+  const [database, r2] = await Promise.all([
+    inspectD1ForUninstall(instance),
+    cloudflareApi(
+      `/accounts/${instance.accountId}/r2/buckets/${encodeURIComponent(instance.r2Name)}/objects`,
+      { query: { per_page: 1 } },
+    ),
+  ]);
+  console.log(
+    `✓ 卸载目标已核对：Worker ${instance.workerName}、R2 ${instance.r2Name}、D1 ${instance.d1Name}。`,
+  );
+  return { database, r2Missing: r2.missing };
+}
+
+async function deleteD1(instance, existing) {
+  console.log(`[3/3] 正在删除资料数据库 ${instance.d1Name}…`);
+  if (!existing) {
+    console.log("✓ 资料数据库已经不存在。");
+    return;
   }
   const removed = await runWrangler(
     [
@@ -598,7 +810,7 @@ async function deleteD1(instance) {
 }
 
 async function deleteWorker(instance) {
-  console.log(`[3/3] 正在删除云端服务 ${instance.workerName}…`);
+  console.log(`\n[1/3] 正在删除云端 Worker ${instance.workerName}，阻止新的文件写入…`);
   const removed = await runWrangler(
     ["delete", instance.workerName, "--force", "--config", CONFIG_PATH],
     instance,
@@ -608,8 +820,8 @@ async function deleteWorker(instance) {
   }
   console.log(
     instance.customHostname
-      ? `✓ 云端服务和域名绑定 ${instance.customHostname} 已删除。`
-      : "✓ 云端服务已经删除或原本没有发布。",
+      ? `✓ Worker、Worker Secret 和域名绑定 ${instance.customHostname} 已删除。`
+      : "✓ Worker 和 Worker Secret 已删除或原本没有发布。",
   );
 }
 
@@ -620,35 +832,38 @@ async function writeDefaultConfig() {
 }
 
 async function clearLocalInstance() {
-  await writeDefaultConfig();
   const targets = [
     path.join(ROOT, ".dev.vars"),
     path.join(ROOT, "config", "r2-cors.local.json"),
     path.join(ROOT, ".wrangler"),
     path.join(ROOT, ".vinext"),
+    path.join(ROOT, ".next"),
     path.join(ROOT, "dist"),
     path.join(ROOT, "tsconfig.tsbuildinfo"),
   ];
   for (const target of targets) {
     await rm(target, { recursive: true, force: true });
   }
+  await writeDefaultConfig();
 }
 
-async function deleteEverything(instance, prompt) {
+async function uninstallInstance(instance, prompt) {
   if (!instance.configured) {
-    console.log("\n当前没有完整的实例配置。可以选择 2 重新配置。");
+    console.log("\n当前没有可安全识别的一整套实例配置，无法一键卸载。可以选择 2 重新配置。");
     return;
   }
-  console.log("\n将永久删除以下当前 R2 Drive 实例：");
-  console.log(`- R2 存储桶：${instance.r2Name}（其中所有文件）`);
-  console.log(`- 资料数据库：${instance.d1Name}（主人账号、目录和分享）`);
-  console.log(`- 云端服务：${instance.workerName}`);
-  if (instance.customHostname) console.log(`- 域名绑定：${instance.customHostname}`);
-  console.log("- 本机账号、缓存、Secret 和实例配置");
+  console.log("\n一键卸载将永久删除以下当前 R2 Drive 实例：");
+  console.log(`- Cloudflare Worker：${instance.workerName}（含版本、Secret 和路由）`);
+  if (instance.customHostname) console.log(`- Worker 域名绑定：${instance.customHostname}`);
+  console.log(
+    `- R2 存储桶：${instance.r2Name}（全部文件、CORS、生命周期和桶级配置）`,
+  );
+  console.log(`- D1 资料数据库：${instance.d1Name}（主人账号、目录、分享和审计信息）`);
+  console.log("- 本机 Secret、缓存和实例配置");
   console.log("\n不会删除 Wrangler 登录，也不会碰 Cloudflare 账号中的其他项目。");
   const confirmation = (await prompt.question('\n确定不可恢复。请输入 DELETE 后回车：')).trim();
   if (confirmation !== "DELETE") {
-    console.log("\n已取消，没有删除任何信息。");
+    console.log("\n已取消卸载，没有删除任何信息。");
     return;
   }
 
@@ -656,22 +871,28 @@ async function deleteEverything(instance, prompt) {
   console.log("\n正在停止本机 R2 Drive…");
   await stopOwnedService(3000, "drive");
   await stopOwnedService(8788, "setup");
-  await deleteR2(instance);
-  await deleteD1(instance);
+  const targets = await preflightUninstall(instance);
   await deleteWorker(instance);
+  await deleteR2(instance, targets.r2Missing);
+  await deleteD1(instance, targets.database);
   await clearLocalInstance();
-  console.log("\n✓ 当前 R2 Drive 实例已全部删除。源代码仍保留，可选择 2 重新配置。");
+  console.log("\n✓ R2 Drive 已一键卸载完成。源代码仍保留，可选择 2 重新配置。");
 }
 
 export function formatMenu(instance) {
-  const status = instance.configured ? "已配置完毕" : "尚未配置";
+  const status =
+    instance.configured && instance.customHostname
+      ? "已配置完毕"
+      : instance.configured
+        ? "缺少域名"
+        : "尚未配置";
   return [
     "====================================================",
     ` R2 Drive 小白启动器 · ${status}`,
     "====================================================",
     `1. 打开网盘【${status}】`,
     "2. 配置／重新配置",
-    "3. 删除所有信息（本机 + 当前 Cloudflare R2 Drive）",
+    "3. 一键卸载（遇到 R2 10008 自动清除 all）",
     "4. 检查更新／一键升级",
     "0. 退出",
   ].join("\n");
@@ -691,7 +912,7 @@ async function main() {
       try {
         if (choice === "1") await openDrive(instance);
         else if (choice === "2") await openSetup();
-        else if (choice === "3") await deleteEverything(instance, prompt);
+        else if (choice === "3") await uninstallInstance(instance, prompt);
         else if (choice === "4") await openUpdater();
         else if (choice === "0") break;
         else console.log("\n请输入菜单中的数字。");

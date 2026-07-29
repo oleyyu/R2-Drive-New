@@ -52,18 +52,48 @@ test("ships a safe beginner launcher on macOS and Windows", async () => {
 
   assert.ok(commandStat.mode & 0o100, "macOS launcher must be executable");
   assert.match(command, /node scripts\/launcher\.mjs/);
+  assert.match(command, /一键卸载当前实例/);
   assert.match(batch, /node scripts\\launcher\.mjs/);
+  assert.match(batch, /一键卸载当前实例/);
   assert.match(launcher, /1\. 打开网盘【\$\{status\}】/);
   assert.match(launcher, /2\. 配置／重新配置/);
-  assert.match(launcher, /3\. 删除所有信息/);
+  assert.match(launcher, /3\. 一键卸载/);
   assert.match(launcher, /4\. 检查更新／一键升级/);
   assert.match(launcher, /SETUP_URL}\?step=update/);
   assert.match(launcher, /setup\.mjs"\), "--no-open"/);
   assert.match(launcher, /请输入 DELETE 后回车/);
+  assert.match(launcher, /preflightUninstall/);
+  assert.match(launcher, /正在删除云端 Worker/);
+  assert.match(launcher, /全部文件、CORS、生命周期和桶级配置/);
   assert.match(launcher, /r2", "bucket", "delete"/);
+  assert.match(launcher, /code:\\s\*10008/);
+  assert.match(launcher, /purgeAllR2Data/);
+  assert.match(launcher, /uninstall-worker\.mjs/);
+  // The purge helper runs entirely on the edge. `wrangler dev --remote`
+  // cannot start through a proxy-only network.
+  assert.match(launcher, /triggers: \{ crons: \["\* \* \* \* \*"\] \}/);
+  assert.match(launcher, /\["deploy", "--config", configPath\]/);
+  assert.doesNotMatch(launcher, /"dev",\s+"--remote"/);
   assert.match(launcher, /d1",\s+"delete"/);
   assert.match(launcher, /\["delete", instance\.workerName, "--force"/);
   assert.doesNotMatch(launcher, /wrangler logout/);
+  const uninstallSource = launcher.match(
+    /async function uninstallInstance[\s\S]+?\n}\n\nexport function formatMenu/,
+  )?.[0];
+  assert.ok(uninstallSource);
+  const uninstallOrder = [
+    "await preflightUninstall",
+    "await deleteWorker",
+    "await deleteR2",
+    "await deleteD1",
+    "await clearLocalInstance",
+  ].map((marker) => uninstallSource.indexOf(marker));
+  assert.ok(uninstallOrder.every((index) => index >= 0));
+  assert.deepEqual(
+    uninstallOrder,
+    [...uninstallOrder].sort((left, right) => left - right),
+    "uninstall must preflight, stop remote writes, delete storage, then clear local targets",
+  );
   assert.equal(describeInstance(JSON.parse(defaultConfig)).configured, false);
 
   const configured = describeInstance({
@@ -78,7 +108,7 @@ test("ships a safe beginner launcher on macOS and Windows", async () => {
     r2_buckets: [{ bucket_name: "r2-drive-files" }],
   });
   assert.equal(configured.configured, true);
-  assert.equal(driveEntryUrl(configured), "http://localhost:3000/start");
+  assert.equal(driveEntryUrl(configured), "");
   const domainInstance = describeInstance({
     name: "r2-drive",
     account_id: "a".repeat(32),
@@ -92,16 +122,17 @@ test("ships a safe beginner launcher on macOS and Windows", async () => {
     r2_buckets: [{ bucket_name: "r2-drive-files" }],
   });
   assert.equal(driveEntryUrl(domainInstance), "https://drive.example.com/start");
-  assert.match(launcher, /if \(instance\.customHostname\)/);
+  assert.match(launcher, /if \(!instance\.customHostname\)/);
+  assert.match(launcher, /不能发布或使用 R2 Drive/);
   assert.match(launcher, /主人账号和密码只保存在这一份线上网盘中/);
   assert.equal(
     encodeR2ObjectKey("资料/2026 年/a+b?#.txt"),
     "%E8%B5%84%E6%96%99/2026%20%E5%B9%B4/a%2Bb%3F%23.txt",
   );
   const menuOutput = formatMenu(configured);
-  assert.match(menuOutput, /1\. 打开网盘【已配置完毕】/);
+  assert.match(menuOutput, /1\. 打开网盘【缺少域名】/);
   assert.match(menuOutput, /2\. 配置／重新配置/);
-  assert.match(menuOutput, /3\. 删除所有信息/);
+  assert.match(menuOutput, /3\. 一键卸载/);
   assert.match(menuOutput, /4\. 检查更新／一键升级/);
 });
 
@@ -308,6 +339,25 @@ test("setup migrates local and remote databases without runtime schema writes", 
   assert.doesNotMatch(databaseRuntime, /CREATE TABLE|ALTER TABLE/);
 });
 
+test("admin settings exposes one-click Wrangler upload acceleration", async () => {
+  const [settings, setup] = await Promise.all([
+    readFile(path.join(root, "components", "SettingsClient.tsx"), "utf8"),
+    readFile(path.join(root, "scripts", "setup.mjs"), "utf8"),
+  ]);
+  assert.match(settings, /user\.role === "admin"/);
+  assert.match(settings, /开启上传加速/);
+  assert.match(settings, /127\.0\.0\.1:8788\/\?step=upload-acceleration/);
+  assert.match(settings, /r2-drive:enable-upload-acceleration/);
+  assert.match(settings, /uploadConcurrency: 6/);
+  assert.match(settings, /networkProfile: "throughput"/);
+  assert.match(setup, /async function enableUploadAcceleration/);
+  assert.match(setup, /"local-uploads",\s+"enable"/);
+  assert.match(setup, /"local-uploads", "get"/);
+  assert.match(setup, /"cors",\s+"set"/);
+  assert.match(setup, /url\.pathname === "\/api\/upload-acceleration\/enable"/);
+  assert.doesNotMatch(setup, /oauth\.pipelines\.cloudflare\.com/);
+});
+
 async function availablePort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");
@@ -321,32 +371,11 @@ async function availablePort() {
 
 test("local setup wizard is loopback-only and protects write routes", async () => {
   const port = await availablePort();
-  let fakeDriveMode = "ready";
-  const fakeDrive = createServer((request, response) => {
-    if (request.url === "/start") {
-      if (fakeDriveMode === "error") {
-        response.writeHead(500, { "content-type": "text/html; charset=utf-8" });
-        response.end("<!doctype html><title>启动失败</title><h1>本地页面报错</h1>");
-        return;
-      }
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end("<!doctype html><title>登录 · R2 Drive</title><h1>R2 Drive</h1>");
-      return;
-    }
-    response.writeHead(404);
-    response.end("not found");
-  });
-  fakeDrive.listen(0, "localhost");
-  await once(fakeDrive, "listening");
-  const fakeDriveAddress = fakeDrive.address();
-  const fakeDrivePort =
-    typeof fakeDriveAddress === "object" && fakeDriveAddress ? fakeDriveAddress.port : 0;
   const child = spawn(process.execPath, ["scripts/setup.mjs", "--no-open"], {
     cwd: root,
     env: {
       ...process.env,
       R2_DRIVE_SETUP_PORT: String(port),
-      R2_DRIVE_LOCAL_PORT: String(fakeDrivePort),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -384,6 +413,13 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     assert.match(html, /先确认你有什么/);
     assert.match(html, /data-choice-group="cloudflare"/);
     assert.match(html, /data-choice-group="r2"/);
+    assert.match(html, /R2 是否已绑定付款卡/);
+    assert.match(html, /已经绑定/);
+    assert.match(html, /还未绑定/);
+    assert.match(html, /请先在 R2 控制台绑定付款卡/);
+    assert.match(html, /state\.r2Choice === "yes"/);
+    assert.doesNotMatch(html, /我有 R2 存储桶/);
+    assert.doesNotMatch(html, /是否已经创建 R2 存储桶/);
     assert.match(html, /developers\.cloudflare\.com\/r2\/buckets\/create-buckets/);
     assert.match(html, /一键创建 R2 桶（网盘）/);
     assert.match(html, /id="account-plan-card"/);
@@ -394,15 +430,31 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     assert.match(html, /\/api\/r2\/create/);
     assert.match(html, /自动查找或创建（推荐）/);
     assert.match(html, /检查并连接存储/);
-    assert.match(html, /有域名：先发布域名/);
-    assert.match(html, /没有域名：打开本机版/);
-    assert.match(html, /只需在域名网盘设置一次主人账号和密码/);
+    assert.match(html, /发布和使用前必须有域名/);
+    assert.match(html, /没有域名不能发布/);
+    assert.match(html, /没有域名不能使用/);
+    assert.doesNotMatch(html, /没有域名：打开本机版/);
+    assert.doesNotMatch(html, /暂时只在本机用/);
     assert.match(html, /name="customHostname"/);
     assert.match(html, /id="zone-choice"/);
     assert.match(html, /自动识别并发布域名/);
     assert.match(html, /一键发布并自动绑定/);
+    assert.match(html, /id="domain-setup-body"/);
+    assert.match(html, /id="domain-progress"/);
+    assert.match(html, /id="open-production"[\s\S]*打开网盘/);
+    assert.match(html, /byId\("publish-drive"\)\.classList\.add\("hidden"\)/);
+    assert.match(html, /byId\("publish-status"\)\.classList\.add\("hidden"\)/);
+    assert.match(html, /byId\("domain-progress"\)\.classList\.add\("hidden"\)/);
+    assert.match(html, /!state\.configuredHostname/);
+    assert.doesNotMatch(html, /打开线上网盘/);
     assert.match(html, /requestedStep === "domain"/);
     assert.match(html, /requestedStep === "update"/);
+    assert.match(html, /requestedStep === "upload-acceleration"/);
+    assert.match(html, /一键开启上传加速/);
+    assert.match(html, /不打开 Cloudflare 页面，也不要求复制密钥/);
+    assert.match(html, /\/api\/upload-acceleration\/enable/);
+    assert.match(html, /event\.origin !== expectedOrigin/);
+    assert.match(html, /r2-drive:enable-upload-acceleration/);
     assert.match(html, /检查与安装更新/);
     assert.match(html, /\/api\/update\/check/);
     assert.match(html, /\/api\/update\/install/);
@@ -413,11 +465,13 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     assert.doesNotThrow(() => new Function(browserScript));
     assert.match(html, /这不一定是域名或 DNS 问题/);
     assert.match(html, /只有日志明确提示同名 CNAME 冲突时/);
+    assert.match(html, /domain\.digitalplat\.org/);
+    assert.match(html, /你的名字\.dpdns\.org/);
+    assert.match(html, /把两条 NS 填进 Nameservers/);
+    assert.match(html, /free-domain-dpdns\.md/);
     assert.doesNotMatch(html, /window\.confirm/);
-    assert.match(html, /\/api\/local\/start/);
-    assert.match(html, /id="local-progress"/);
-    assert.match(html, /本地网盘启动进度/);
-    assert.match(html, /重新启动网盘/);
+    assert.doesNotMatch(html, /id="start-local"/);
+    assert.doesNotMatch(html, /id="local-progress"/);
     assert.doesNotMatch(html, /HTTP Origin/);
     assert.doesNotMatch(html, /Worker 代理/);
     assert.ok(token);
@@ -433,6 +487,13 @@ test("local setup wizard is loopback-only and protects write routes", async () =
       body: "{}",
     });
     assert.equal(blocked.status, 400);
+
+    const blockedAcceleration = await fetch(`${base}/api/upload-acceleration/enable`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(blockedAcceleration.status, 400);
 
     const authenticatedUnknownRoute = await fetch(`${base}/api/unknown`, {
       method: "POST",
@@ -464,7 +525,7 @@ test("local setup wizard is loopback-only and protects write routes", async () =
     assert.equal(finalCreateJob.status, "error");
     assert.match(finalCreateJob.error, /连接 Cloudflare 账号/);
 
-    const startLocal = await fetch(`${base}/api/local/start`, {
+    const blockedLocalStart = await fetch(`${base}/api/local/start`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -472,43 +533,8 @@ test("local setup wizard is loopback-only and protects write routes", async () =
       },
       body: "{}",
     });
-    assert.equal(startLocal.status, 202);
-    const startLocalJob = await startLocal.json();
-    let finalStartLocalJob;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const jobResponse = await fetch(`${base}/api/jobs/${startLocalJob.id}`);
-      finalStartLocalJob = await jobResponse.json();
-      if (finalStartLocalJob.status !== "running") break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.equal(finalStartLocalJob.status, "success");
-    assert.equal(finalStartLocalJob.progress.stage, "ready");
-    assert.equal(finalStartLocalJob.progress.percent, 100);
-    assert.equal(finalStartLocalJob.result.alreadyRunning, true);
-
-    fakeDriveMode = "error";
-    const failedStartBeganAt = Date.now();
-    const failedStartLocal = await fetch(`${base}/api/local/start`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-r2-drive-setup-token": token,
-      },
-      body: "{}",
-    });
-    assert.equal(failedStartLocal.status, 202);
-    const failedStartJob = await failedStartLocal.json();
-    let finalFailedStartJob;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const jobResponse = await fetch(`${base}/api/jobs/${failedStartJob.id}`);
-      finalFailedStartJob = await jobResponse.json();
-      if (finalFailedStartJob.status !== "running") break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.equal(finalFailedStartJob.status, "error");
-    assert.equal(finalFailedStartJob.progress.stage, "error");
-    assert.match(finalFailedStartJob.error, /本地地址被其他软件占用/);
-    assert.ok(Date.now() - failedStartBeganAt < 2_500);
+    assert.equal(blockedLocalStart.status, 400);
+    assert.match((await blockedLocalStart.json()).error, /必须先绑定 Active 域名/);
 
     const unconfirmedDeploy = await fetch(`${base}/api/deploy`, {
       method: "POST",
@@ -534,8 +560,6 @@ test("local setup wizard is loopback-only and protects write routes", async () =
       child.kill("SIGTERM");
       await once(child, "close");
     }
-    fakeDrive.close();
-    await once(fakeDrive, "close");
   }
 });
 
@@ -558,8 +582,7 @@ test("setup can create or reuse a private R2 bucket and binds only a custom doma
   assert.match(source, /async function stopPreviousLocalDrive/);
   assert.match(source, /function isOwnedLocalDriveProcess/);
   assert.match(source, /process\.kill\(pid, "SIGKILL"\)/);
-  assert.match(source, /LOCAL_START_TIMEOUT_MS = 120_000/);
-  assert.match(source, /检测到旧网盘，正在自动关闭/);
+  assert.match(source, /不再提供无域名本机版/);
   assert.match(source, /custom_domain: true/);
   assert.match(source, /config\.workers_dev = false/);
   assert.match(source, /config\.preview_urls = false/);

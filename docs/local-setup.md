@@ -13,7 +13,7 @@ R2 Drive 是开源自托管项目，不提供由项目作者管理的共享实�
 
 首次使用选择“2. 配置／重新配置”；配置完成后，每次选择“1. 打开网盘【已配置完毕】”即可。普通用户不必看懂或输入 localhost 地址。启动器不会读取或上传浏览器密码，也不会把 Cloudflare 凭据发送给项目作者。Node.js 缺失或版本过旧时，会打开 Node.js 官方下载页；安装完成后再次双击即可。
 
-macOS 从浏览器下载的未签名脚本可能首次被系统拦截，此时右键 `R2-Drive.command` 并选择“打开”。安装助手和本地网盘运行时要保留终端窗口，关闭它就会停止本地服务。
+macOS 从浏览器下载的未签名脚本可能首次被系统拦截，此时右键 `R2-Drive.command` 并选择“打开”。安装助手运行时要保留终端窗口；关闭它只会停止本机配置助手，不会停止已经发布到 Cloudflare 的线上网盘。
 
 ## 命令行启动
 
@@ -73,7 +73,7 @@ npx wrangler login
 
 ### 准备私人网盘
 
-安装助手会先要求选择“有没有 Cloudflare 账号”和“有没有 R2 存储桶”。选择“还没有”后，连接 Cloudflare 并进入下一页，填写桶名称，再点击“一键创建 R2 桶（网盘）”。助手会在当前选中的账号中创建私人 APAC R2 桶；已有同名桶时会直接复用，不会重复创建。
+安装助手会先要求选择“有没有 Cloudflare 账号”和“R2 是否已绑定付款卡”。选择“还未绑定”时，先打开 R2 控制台按提示添加付款方式并启用 R2；回到助手选择“已经绑定”后才能进入下一页。随后填写桶名称并点击“一键创建 R2 桶（网盘）”；助手会在当前选中的账号中创建私人 APAC R2 桶，已有同名桶时会直接复用，不会重复创建。
 
 也可以选择手动创建 R2：
 
@@ -92,25 +92,23 @@ npx wrangler login
 - 执行数据库迁移。
 - 设置为私人主人模式，并为大文件启用自动分片和代理回退。
 
+域名发布完成后，管理员可在网盘“个人设置 → 上传加速”点击一次。设置页会自动切换为 80 MiB 分片、6 路并发，并通知本机助手用 Wrangler 开启和复核 Local Uploads、同步 CORS；不需要打开 Cloudflare 页面或粘贴任何密钥。为了让本机助手保持可用，请通过 `R2-Drive.command` / `R2-Drive.bat` 的“打开网盘”进入。
+
 如果数据库名称已经被当前账号占用，才需要打开“高级设置”，选择使用已有数据库。已有桶的位置不能原地改成 APAC。
 
 ### 打开网盘
 
-如果准备绑定自己的域名，请先点击“有域名：先发布域名”，发布成功后再打开域名网盘并创建主人账号。这样账号和密码只设置一次；以后双击启动器选择“打开网盘”也会直接进入域名版。
+R2 Drive 必须先绑定域名才能发布和使用，不提供无域名本机版或 `workers.dev` 备用入口。点击“继续检查域名”，发布成功后再打开线上网盘并创建主人账号。登录邮箱和至少 12 位的密码都由你自己设置，邮箱只作为登录名，不会发送验证码；填写两次相同密码后，第一个账号就是主人账号，系统随后拒绝其他注册。
 
-只有确定不使用域名时，才点击“没有域名：打开本机版”。安装助手会依次显示“启动服务、编译页面、检查账号页、打开网盘”的真实进度，成功后自动跳转。第一次打开会进入“创建主人账号”：登录邮箱和至少 12 位的密码都由你自己设置，邮箱只作为登录名，不会发送验证码。填写两次相同密码后，第一个账号就是主人账号，系统随后拒绝其他注册。
+没有付费域名时，按 [DPDNS 免费域名接入 Cloudflare](free-domain-dpdns.md) 申请 `你的名字.dpdns.org`，把 Cloudflare 分配的两条 NS 回填到 DigitalPlat。Cloudflare Zone 变成 Active 后，回到向导点击“重新识别域名”。
 
-若以前启动的本地网盘没有正常退出，直接点击“重新启动网盘”。助手会核对占用端口的进程路径和项目目录，只在确认它属于当前 R2 Drive 项目后自动关闭旧进程，再启动新网盘，不需要手动寻找旧终端。无法确认身份的其他软件不会被强制关闭。启动失败或超过两分钟时也会停止等待并显示恢复方法；“查看错误详情”只在排查问题时使用。
-
-若需要实测预签名直传，可在 Dashboard 创建只限目标桶、具有 Object Read & Write 权限的 R2 API Token，再通过安装助手的可选区域保存到 `.dev.vars`。
+若需要在开发环境实测预签名直传，可在 Dashboard 创建只限目标桶、具有 Object Read & Write 权限的 R2 API Token，并保存到 `.dev.vars`。
 
 `.dev.vars` 和向导生成的 `config/r2-cors.local.json` 已被 Git 忽略。不要截图、提交或粘贴 Secret。
 
-### 用自己的域名发布（可选）
+### 用自己的域名发布（必需）
 
-发布不是本机上传、整理和主人下载的必要条件，但公开分享只有绑定自己的域名并完成发布后才会开启。未绑定域名时，文件列表不显示分享操作，创建分享与公开下载接口也会拒绝请求，避免生成别人无法打开的 localhost 链接。
-
-Cloudflare 的本机开发数据库与线上 D1 是两个独立环境，所以不要先在本机版创建账号再改用域名版。向导会先准备两边所需的数据表，但不会复制账号密码或文件。发布域名后，启动器固定打开域名版，避免以后误入另一套本机账号。
+Active 域名是发布、打开网盘、创建主人账号和公开分享的共同前提。未绑定域名时，启动器只会打开域名配置页，不会启动本机网盘。
 
 可以从管理控制台点击“绑定域名”。通过启动器打开网盘时，本机会同时准备只监听 `127.0.0.1` 的配置助手，按钮会直接进入域名步骤；若配置助手已经关闭，重新双击启动器并选择“2. 配置／重新配置”。安装助手会使用本机 Wrangler 登录授权，自动读取所选 Cloudflare 账号中的 Active 域名。只有一个域名时直接选中；有多个时默认选择第一个，也允许从简单列表切换。网盘地址默认生成为 `drive.你的域名`，普通用户不需要手动填写。
 
@@ -123,7 +121,7 @@ Cloudflare 的本机开发数据库与线上 D1 是两个独立环境，所以�
 5. 再次应用远程迁移并部署。
 6. 若填写桶级 R2 凭据，通过 Wrangler Secret 写入。
 
-若当前账号没有 Active 域名，向导会给出 Cloudflare 添加域名入口；添加完成后点击“重新识别域名”即可。目标主机名不能已有 CNAME。Cloudflare 会自动创建 DNS 记录和 HTTPS 证书。若自动绑定失败，向导会直接显示小白处理方法：先在 Cloudflare 的 DNS 页面删除同名 CNAME，确认根域名状态为 Active，再回到向导重试；不要求用户手写 Worker 路由。
+若当前账号没有 Active 域名，向导会直接显示 DPDNS 申请、Cloudflare 添加域、复制 NS、回填 DigitalPlat 和等待 Active 的步骤。已有付费域名可直接使用 Cloudflare 添加域入口；添加完成后点击“重新识别域名”。目标主机名不能已有 CNAME。Cloudflare 会自动创建 DNS 记录和 HTTPS 证书。若自动绑定失败，只有错误明确提示同名 CNAME 冲突时，才删除该主机名原有的 CNAME；处理后回向导重试，不要求用户手写 Worker 路由。
 
 ## 完全手动配置
 
@@ -189,8 +187,10 @@ npx wrangler secret put R2_SECRET_ACCESS_KEY
 
 若当前没有绑定域名，更新器只升级本机程序和数据库，不会凭空创建公网地址。若 Wrangler 官方 OAuth 已过期，需要先在配置助手重新连接 Cloudflare，再重试更新。
 
-## 删除当前实例
+## 一键卸载
 
-双击启动器并选择“3. 删除所有信息”。终端会从当前 `wrangler.jsonc` 读取并列出准确的 R2 桶、D1 数据库、Worker 和自定义域名；只有再次输入大写 `DELETE` 才会开始。R2 桶必须先清空才能删除，因此启动器会通过 Cloudflare 官方 Object API 分页永久删除桶中对象，再依次删除桶、编号完全匹配的 D1 和 Worker。Cloudflare 的具体规则见 [删除 R2 桶](https://developers.cloudflare.com/r2/buckets/delete-buckets/) 与 [List objects API](https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/objects/methods/list/)。
+双击启动器并选择“3. 一键卸载”。终端会从当前 `wrangler.jsonc` 读取并列出准确的 Worker、R2 桶、D1 数据库和自定义域名；只有再次输入大写 `DELETE` 才会开始。启动器会先用 D1 编号和 R2 Object API 做只读预检，确认当前 Cloudflare 账号中的目标与本机配置一致，再删除 Worker 以阻止新的上传。随后它会分页永久删除 R2 对象；若删除桶返回 `10008`，还会自动读取 D1 中的未完成分片上传，通过运行在 Cloudflare 边缘的临时清理 Worker 逐个 abort、再次清空普通对象并重试。可重试的 R2 服务错误会指数退避重试，临时 Worker 会在操作结束后停止。最后删除编号完全匹配的 D1 与本地配置。Cloudflare 的具体规则见 [删除 R2 桶](https://developers.cloudflare.com/r2/buckets/delete-buckets/)、[Multipart Uploads](https://developers.cloudflare.com/r2/objects/multipart-objects/) 与 [List objects API](https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/objects/methods/list/)。
 
-所有云端步骤成功后，启动器才会恢复干净的 `wrangler.jsonc`，并删除 `.dev.vars`、本地 CORS、构建缓存和 Wrangler 项目缓存。项目源代码与这台电脑的全局 Wrangler 登录都会保留，Cloudflare 账号中的其他资源不会被处理。若网络、权限或 Cloudflare API 使任一步失败，本地目标配置会保留，处理提示后再次选择第 3 项即可继续；已经永久删除的文件无法恢复。
+删除 R2 桶会一并删除 CORS、生命周期、事件通知和其他桶级配置；删除 Worker 会一并删除 Worker Secret、版本和域名路由。所有云端步骤成功后，启动器才会恢复干净的 `wrangler.jsonc`，并删除 `.dev.vars`、本地 CORS、构建缓存和 Wrangler 项目缓存。项目源代码、Cloudflare 域名专区、其他项目与这台电脑的全局 Wrangler 登录都会保留。手动创建且可能被其他项目共用的 R2 API Token 也不会被代为删除，但其本机副本和 Worker Secret 会清除。
+
+若网络、权限或 Cloudflare API 使任一步失败，本地目标配置会保留，处理提示后再次选择第 3 项即可继续；已经永久删除的文件无法恢复。

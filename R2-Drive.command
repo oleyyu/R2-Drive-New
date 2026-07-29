@@ -34,7 +34,7 @@ if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number
 fi
 
 printf "Node.js %s 已就绪。\n" "$(node --version)"
-printf "请选择打开网盘、配置、更新，或删除当前实例。\n\n"
+printf "请选择打开网盘、配置、更新，或一键卸载当前实例。\n\n"
 
 if ! node scripts/launcher.mjs; then
   printf "\nR2 Drive 启动器意外停止。请重新双击 R2-Drive.command 再试一次。\n"

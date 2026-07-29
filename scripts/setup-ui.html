@@ -1273,8 +1273,8 @@
             <span>连接存储</span>
           </button>
           <button class="nav-item" type="button" data-step="2">
-            <span class="nav-icon">开</span>
-            <span>打开网盘</span>
+            <span class="nav-icon">须</span>
+            <span>域名前提</span>
           </button>
           <button class="nav-item" type="button" data-step="3">
             <span class="nav-icon">域</span>
@@ -1284,6 +1284,10 @@
             <span class="nav-icon">新</span>
             <span>程序更新</span>
           </button>
+          <button class="nav-item" type="button" data-step="5">
+            <span class="nav-icon">速</span>
+            <span>上传加速</span>
+          </button>
         </nav>
       </aside>
 
@@ -1292,7 +1296,7 @@
           <button class="button" id="top-next" type="button">继续设置　›</button>
           <button class="button secondary" id="help-top" type="button">查看帮助</button>
           <button class="button secondary" id="check-environment" type="button">检查环境</button>
-          <span class="local-only"><span class="shield">✓</span>只在本机运行</span>
+          <span class="local-only"><span class="shield">✓</span>安装助手只在本机运行</span>
         </header>
 
         <main class="content">
@@ -1342,9 +1346,9 @@
                 <div class="choice-row">
                   <div class="choice-title">
                     <span class="choice-mark">R2</span>
-                    <span>我有 R2 存储桶</span>
+                    <span>R2 是否已绑定付款卡</span>
                   </div>
-                  <div class="segmented" aria-label="是否已经创建 R2 存储桶">
+                  <div class="segmented" aria-label="是否已为 R2 绑定付款卡">
                     <button
                       class="choice-button"
                       type="button"
@@ -1352,7 +1356,7 @@
                       data-choice-value="yes"
                       aria-pressed="false"
                     >
-                      已经创建
+                      已经绑定
                     </button>
                     <button
                       class="choice-button"
@@ -1361,7 +1365,7 @@
                       data-choice-value="no"
                       aria-pressed="false"
                     >
-                      还没有
+                      还未绑定
                     </button>
                   </div>
                   <a
@@ -1430,32 +1434,10 @@
               </div>
 
               <div class="guide hidden" id="r2-guide">
-                <h3>没有 R2？下一页可以一键创建</h3>
+                <h3>请先为 R2 绑定付款卡</h3>
                 <p>
-                  先连接 Cloudflare 账号，然后进入下一页填写一个名称。安装助手可以直接在你的账号中创建私人存储桶。
+                  打开 Cloudflare R2 控制台，按页面提示添加付款方式并启用 R2。完成后回到这里选择“已经绑定”，下一页可以查找或一键创建私人存储桶。
                 </p>
-                <div class="guide-steps">
-                  <div class="guide-step">
-                    <span class="guide-number">1</span>
-                    <strong>连接账号</strong>
-                    <span>授权只在 Cloudflare 官方页面完成。</span>
-                  </div>
-                  <div class="guide-step">
-                    <span class="guide-number">2</span>
-                    <strong>填写名称</strong>
-                    <span>使用小写字母、数字和连字符。</span>
-                  </div>
-                  <div class="guide-step">
-                    <span class="guide-number">3</span>
-                    <strong>一键创建</strong>
-                    <span>助手会创建私人 R2 桶并选择 APAC 位置提示。</span>
-                  </div>
-                  <div class="guide-step">
-                    <span class="guide-number">4</span>
-                    <strong>继续连接</strong>
-                    <span>创建完成后继续准备资料数据库和上传优化。</span>
-                  </div>
-                </div>
                 <div class="guide-actions">
                   <a
                     class="button external"
@@ -1463,18 +1445,18 @@
                     target="_blank"
                     rel="noreferrer"
                   >
-                    想手动创建？打开 R2 控制台
+                    去 R2 控制台绑定
                   </a>
                   <a
                     class="button secondary external"
-                    href="https://developers.cloudflare.com/r2/buckets/create-buckets/"
+                    href="https://developers.cloudflare.com/r2/pricing/"
                     target="_blank"
                     rel="noreferrer"
                   >
-                    查看官方图文说明
+                    查看 R2 官方说明
                   </a>
                   <button class="button secondary" id="r2-created" type="button">
-                    我已经有存储桶
+                    我已经绑定付款卡
                   </button>
                 </div>
               </div>
@@ -1637,8 +1619,8 @@
           <section class="step-page" data-page="2">
             <div class="page-body">
               <header class="page-heading">
-                <h2>选择网盘打开方式</h2>
-                <p>有自己的域名就先发布域名，只需在域名网盘设置一次主人账号和密码。</p>
+                <h2>发布和使用前必须有域名</h2>
+                <p>R2 Drive 不提供本机版或 workers.dev 备用入口；绑定域名后才能发布、打开和创建主人账号。</p>
               </header>
 
               <div class="ready-stage">
@@ -1647,86 +1629,41 @@
                   <div class="folder-front"></div>
                 </div>
                 <div class="assurances">
-                  <span>只有主人能注册</span>
-                  <span>域名版可创建分享</span>
-                  <span>绑定后只打开域名版</span>
+                  <span>没有域名不能发布</span>
+                  <span>没有域名不能使用</span>
+                  <span>绑定后才开放主人账号</span>
                 </div>
-                <div class="local-launch-actions">
-                  <button class="button secondary" id="start-local" type="button">
-                    没有域名：打开本机版
-                  </button>
-                  <a
-                    class="button secondary hidden"
-                    id="open-local"
-                    href="http://localhost:3000/start"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    再次打开网盘 ↗
-                  </a>
-                  <span class="status" id="local-status" role="status">等待启动</span>
-                </div>
-                <div class="launch-progress" id="local-progress" aria-live="polite">
-                  <div class="launch-progress-head">
-                    <span id="local-progress-message">点击上方按钮开始</span>
-                    <span id="local-progress-percent">0%</span>
-                  </div>
-                  <div
-                    class="launch-progress-track"
-                    role="progressbar"
-                    aria-label="本地网盘启动进度"
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow="0"
-                    id="local-progress-track"
-                  >
-                    <i class="launch-progress-bar" id="local-progress-bar"></i>
-                  </div>
-                  <div class="launch-stages" aria-hidden="true">
-                    <span class="launch-stage" data-local-stage="starting">启动服务</span>
-                    <span class="launch-stage" data-local-stage="compiling">编译页面</span>
-                    <span class="launch-stage" data-local-stage="verifying">检查账号页</span>
-                    <span class="launch-stage" data-local-stage="ready">打开网盘</span>
+                <div class="guide">
+                  <h3>还没有域名也可以继续</h3>
+                  <p>
+                    下一页提供 DPDNS 免费域名接入 Cloudflare 的完整步骤。申请到的免费名称必须先在
+                    Cloudflare 显示为 Active，安装助手才能识别并发布。
+                  </p>
+                  <div class="guide-actions">
+                    <a
+                      class="button external"
+                      href="https://domain.digitalplat.org/"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      打开 DigitalPlat 免费域名
+                    </a>
+                    <a
+                      class="button secondary external"
+                      href="https://github.com/oleyyu/R2-Drive-New/blob/main/docs/free-domain-dpdns.md"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      查看 DPDNS 小白教程
+                    </a>
                   </div>
                 </div>
-                <p class="launch-help hidden" id="local-help">
-                  点击“重新启动网盘”时会自动关闭可确认属于本项目的旧进程；其他软件不会被强制关闭。
-                  <button class="button ghost compact" id="local-log-open" type="button">
-                    查看错误详情
-                  </button>
-                </p>
-
-                <details class="advanced secret-area">
-                  <summary>保存大文件直传凭据（可选）</summary>
-                  <form id="local-secrets-form" class="advanced-body">
-                    <label for="local-access-key">
-                      <span>Access Key ID</span>
-                      <input
-                        id="local-access-key"
-                        name="accessKeyId"
-                        type="password"
-                        autocomplete="off"
-                      />
-                    </label>
-                    <label for="local-secret-key">
-                      <span>Secret Access Key</span>
-                      <input
-                        id="local-secret-key"
-                        name="secretAccessKey"
-                        type="password"
-                        autocomplete="off"
-                      />
-                    </label>
-                    <button class="button secondary" type="submit">保存在本机</button>
-                    <span class="status" id="secret-status" role="status">尚未保存</span>
-                  </form>
-                </details>
               </div>
             </div>
 
             <footer class="page-footer">
               <button class="button large" id="domain-next" type="button">
-                有域名：先发布域名　›
+                继续检查域名　›
               </button>
               <button class="button secondary" type="button" data-back="1">返回</button>
               <div class="progress" aria-label="打开网盘">
@@ -1742,7 +1679,7 @@
           </section>
 
           <section class="step-page" data-page="3">
-            <div class="page-body">
+            <div class="page-body" id="domain-setup-body">
               <header class="page-heading">
                 <h2>自动识别并发布域名</h2>
                 <p>从当前 Cloudflare 账号查找有效域名，自动生成网盘地址并完成绑定。</p>
@@ -1864,23 +1801,59 @@
               </form>
 
               <div class="guide hidden" id="domain-empty">
-                <h3>当前账号还没有可用域名</h3>
-                <p>先把自己的域名添加到 Cloudflare；状态变成 Active 后，回到这里点击“重新识别域名”。</p>
+                <h3>没有域名就不能发布或使用 R2 Drive</h3>
+                <p>
+                  没有付费域名时，可以申请 <code>你的名字.dpdns.org</code>，把它的 DNS
+                  托管到 Cloudflare。必须等 Cloudflare 状态变成 Active，才能回到这里继续。
+                </p>
+                <div class="guide-steps">
+                  <div class="guide-step">
+                    <span class="guide-number">1</span>
+                    <strong>申请免费名称</strong>
+                    <span>在 DigitalPlat 注册并按页面完成验证，选择 dpdns.org 后缀申请完整名称。</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-number">2</span>
+                    <strong>添加到 Cloudflare</strong>
+                    <span>在 Cloudflare 选择“添加域”，输入完整的 你的名字.dpdns.org，并选择 Free 套餐。</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-number">3</span>
+                    <strong>复制两条 NS</strong>
+                    <span>Cloudflare 会分配两条专属名称服务器。只复制自己页面上的值，不要照抄示例。</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-number">4</span>
+                    <strong>回填并等待 Active</strong>
+                    <span>回 DigitalPlat 的域名详情，把两条 NS 填进 Nameservers 并保存；生效后回这里重新识别。</span>
+                  </div>
+                </div>
                 <div class="guide-actions">
                   <a
                     class="button external"
+                    href="https://domain.digitalplat.org/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    第 1 步：申请 DPDNS 免费域名
+                  </a>
+                  <a
+                    class="button secondary external"
                     href="https://dash.cloudflare.com/?to=/:account/add-site"
                     target="_blank"
                     rel="noreferrer"
                   >
-                    打开 Cloudflare 添加域名
+                    第 2 步：添加到 Cloudflare
+                  </a>
+                  <a
+                    class="text-link external"
+                    href="https://github.com/oleyyu/R2-Drive-New/blob/main/docs/free-domain-dpdns.md"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    打开逐步教程与排错
                   </a>
                 </div>
-              </div>
-
-              <div class="local-finish hidden" id="local-finish">
-                <strong>可以先只在本机使用</strong>
-                以后有自己的域名时，再次双击启动器，打开“域名发布”即可。不会影响已经存进 R2 的文件。
               </div>
             </div>
 
@@ -1888,20 +1861,17 @@
               <button class="button large hidden" id="publish-drive" type="button">
                 一键发布并自动绑定　›
               </button>
-              <button class="button secondary" id="local-only-finish" type="button">
-                暂时只在本机用
-              </button>
               <a
-                class="button hidden"
+                class="button large hidden"
                 id="open-production"
                 href="#"
                 target="_blank"
                 rel="noreferrer"
               >
-                打开线上网盘
+                打开网盘
               </a>
               <span class="status" id="publish-status" role="status">正在等待自动识别</span>
-              <div class="progress" aria-label="域名发布">
+              <div class="progress" id="domain-progress" aria-label="域名发布">
                 <span>域名发布</span>
                 <span class="progress-dots" aria-hidden="true">
                   <i class="progress-dot"></i><i class="progress-line"></i>
@@ -2002,6 +1972,84 @@
               </div>
             </footer>
           </section>
+
+          <section class="step-page" data-page="5">
+            <div class="page-body">
+              <header class="page-heading">
+                <h2>一键开启上传加速</h2>
+                <p>全程使用这台电脑上的 Wrangler，不打开 Cloudflare 页面，也不要求复制密钥。</p>
+              </header>
+
+              <div class="update-summary">
+                <div class="update-version-card">
+                  <span>R2 就近写入</span>
+                  <strong>Local Uploads</strong>
+                  <small>UploadPart 会先写到离上传者更近的 R2 节点。</small>
+                </div>
+                <div class="update-version-card">
+                  <span>浏览器上传策略</span>
+                  <strong>80 MiB × 6</strong>
+                  <small>当前管理员已自动切换到高吞吐分片和 6 路并发。</small>
+                </div>
+              </div>
+
+              <div class="update-checklist">
+                <span>确认 Wrangler 登录、账号和当前 R2 桶一致</span>
+                <span>用 Wrangler 开启并复核 R2 Local Uploads</span>
+                <span>自动同步当前网盘域名所需的 R2 CORS</span>
+                <span>已有直传 Secret 时继续优先直传，失败自动回退</span>
+              </div>
+
+              <div class="launch-progress" id="acceleration-progress" aria-live="polite">
+                <div class="launch-progress-head">
+                  <span id="acceleration-progress-message">点击下方按钮开始</span>
+                  <span id="acceleration-progress-percent">0%</span>
+                </div>
+                <div
+                  class="launch-progress-track"
+                  role="progressbar"
+                  aria-label="上传加速配置进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                  id="acceleration-progress-track"
+                >
+                  <i class="launch-progress-bar" id="acceleration-progress-bar"></i>
+                </div>
+                <div class="launch-stages" aria-hidden="true">
+                  <span class="launch-stage" data-acceleration-stage="checking">确认网盘</span>
+                  <span class="launch-stage" data-acceleration-stage="local-uploads">就近写入</span>
+                  <span class="launch-stage" data-acceleration-stage="cors">浏览器规则</span>
+                  <span class="launch-stage" data-acceleration-stage="verifying">复核配置</span>
+                </div>
+              </div>
+            </div>
+
+            <footer class="page-footer">
+              <button class="button large" id="enable-upload-acceleration" type="button">
+                开启上传加速
+              </button>
+              <a
+                class="button large hidden"
+                id="acceleration-open"
+                href="#"
+                target="_blank"
+                rel="noreferrer"
+              >
+                打开网盘
+              </a>
+              <span class="status" id="acceleration-status" role="status">尚未开启</span>
+              <div class="progress" aria-label="上传加速">
+                <span>上传加速</span>
+                <span class="progress-dots" aria-hidden="true">
+                  <i class="progress-dot active"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i><i class="progress-line"></i>
+                  <i class="progress-dot"></i>
+                </span>
+              </div>
+            </footer>
+          </section>
         </main>
       </section>
     </div>
@@ -2039,14 +2087,17 @@
         zones: [],
         configuredHostname: "",
         updateInfo: null,
+        accelerationInfo: null,
+        accelerationRunning: false,
       };
 
       const helpUrls = [
         "https://developers.cloudflare.com/fundamentals/setup/account/",
         "https://developers.cloudflare.com/r2/buckets/create-buckets/",
-        "https://developers.cloudflare.com/workers/development-testing/",
+        "https://domain.digitalplat.org/",
         "https://developers.cloudflare.com/workers/configuration/routing/custom-domains/",
         "https://github.com/oleyyu/R2-Drive-New/releases",
+        "https://developers.cloudflare.com/r2/buckets/local-uploads/",
       ];
 
       function setBusy(busy) {
@@ -2060,24 +2111,22 @@
 
       function useProductionHostname(hostname) {
         if (!hostname) return;
-        const url = `https://${hostname}/start`;
         state.configuredHostname = hostname;
         byId("custom-hostname").value = hostname;
-        byId("start-local").dataset.productionUrl = url;
-        byId("start-local").textContent = "打开域名网盘　›";
-        byId("open-local").href = url;
-        byId("open-local").textContent = "再次打开域名网盘 ↗";
-        byId("open-local").classList.remove("hidden");
-        setStatus(byId("local-status"), "ok", "以后只打开这一份域名网盘");
-        renderLocalProgress({
-          percent: 100,
-          stage: "ready",
-          message: "域名网盘已经准备好",
-        });
+        byId("open-production").href = `https://${hostname}/start`;
+        byId("acceleration-open").href = `https://${hostname}/start`;
+        byId("open-production").classList.remove("hidden");
+        byId("domain-setup-body").classList.add("hidden");
+        byId("publish-form").classList.add("hidden");
+        byId("domain-empty").classList.add("hidden");
+        byId("publish-drive").classList.add("hidden");
+        byId("publish-status").classList.add("hidden");
+        byId("domain-progress").classList.add("hidden");
+        if (state.activeStep === 3) byId("top-next").classList.add("hidden");
       }
 
-      const localStageOrder = ["starting", "compiling", "verifying", "ready"];
       const updateStageOrder = ["download", "prepare", "migrate", "deploy"];
+      const accelerationStageOrder = ["checking", "local-uploads", "cors", "verifying", "done"];
 
       function updateStageIndex(stage) {
         if (["checking", "downloading", "verifying", "available", "current"].includes(stage)) {
@@ -2087,6 +2136,36 @@
         if (stage === "migrating") return 2;
         if (["deploying", "ready"].includes(stage)) return 3;
         return 0;
+      }
+
+      function accelerationStageIndex(stage) {
+        const index = accelerationStageOrder.indexOf(stage);
+        return index < 0 ? 0 : index;
+      }
+
+      function renderAccelerationProgress(progress, errorMessage = "") {
+        const value = progress || {
+          percent: errorMessage ? 0 : 3,
+          stage: errorMessage ? "error" : "checking",
+          message: errorMessage || "正在准备 Wrangler",
+        };
+        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
+        const isError = value.stage === "error" || Boolean(errorMessage);
+        const message = errorMessage || value.message || "正在配置上传加速";
+        byId("acceleration-progress").classList.toggle("error", isError);
+        byId("acceleration-progress-message").textContent = message;
+        byId("acceleration-progress-percent").textContent = `${Math.round(percent)}%`;
+        byId("acceleration-progress-bar").style.width = `${percent}%`;
+        byId("acceleration-progress-track").setAttribute(
+          "aria-valuenow",
+          String(Math.round(percent)),
+        );
+        const activeIndex = accelerationStageIndex(value.stage);
+        for (const stage of document.querySelectorAll("[data-acceleration-stage]")) {
+          const index = accelerationStageOrder.indexOf(stage.dataset.accelerationStage);
+          stage.classList.toggle("done", !isError && index < activeIndex);
+          stage.classList.toggle("active", index === activeIndex);
+        }
       }
 
       function renderUpdateProgress(progress, errorMessage = "") {
@@ -2112,103 +2191,6 @@
           stage.classList.toggle("done", !isError && index < activeIndex);
           stage.classList.toggle("active", index === activeIndex);
         }
-      }
-
-      function renderLocalProgress(progress, errorMessage = "") {
-        const value = progress || {
-          percent: 0,
-          stage: "starting",
-          message: "点击上方按钮开始",
-        };
-        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
-        const isError = value.stage === "error" || Boolean(errorMessage);
-        const message = errorMessage || value.message || "正在准备";
-        const progressBox = byId("local-progress");
-        progressBox.classList.toggle("error", isError);
-        byId("local-progress-message").textContent = message;
-        byId("local-progress-percent").textContent = `${Math.round(percent)}%`;
-        byId("local-progress-bar").style.width = `${percent}%`;
-        byId("local-progress-track").setAttribute("aria-valuenow", String(Math.round(percent)));
-
-        let activeIndex = localStageOrder.indexOf(value.stage);
-        if (value.stage === "checking" || value.stage === "stopping") activeIndex = 0;
-        if (isError) {
-          activeIndex = percent >= 80 ? 2 : percent >= 40 ? 1 : 0;
-        }
-        for (const stage of document.querySelectorAll("[data-local-stage]")) {
-          const index = localStageOrder.indexOf(stage.dataset.localStage);
-          stage.classList.toggle("done", !isError && index < activeIndex);
-          stage.classList.toggle("active", index === activeIndex);
-        }
-
-        byId("local-help").classList.toggle("hidden", !isError);
-        if (byId("start-local").dataset.productionUrl) {
-          byId("start-local").textContent = "打开域名网盘　›";
-          return;
-        }
-        byId("start-local").textContent = isError
-          ? "重新启动网盘　›"
-          : value.stage === "stopping"
-            ? "正在关闭旧网盘"
-            : percent > 0 && percent < 100
-              ? "正在启动网盘"
-              : "启动并打开网盘　›";
-      }
-
-      function createLaunchWindow() {
-        const popup = window.open("", "_blank");
-        if (!popup) return null;
-        popup.document.open();
-        popup.document.write(`<!doctype html>
-          <html lang="zh-CN">
-            <head>
-              <meta charset="utf-8" />
-              <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>R2 Drive 正在启动</title>
-              <style>
-                * { box-sizing: border-box; }
-                body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
-                  color: #182235; background: #f7fbff; font-family: system-ui, sans-serif; }
-                main { width: min(520px, 100%); padding: 32px; border: 1px solid #d7e7f4;
-                  border-radius: 16px; background: white; box-shadow: 0 18px 60px rgba(47, 93, 130, .12); }
-                h1 { margin: 0 0 10px; font-size: 26px; }
-                p { margin: 0; color: #68778d; line-height: 1.6; }
-                .track { height: 10px; overflow: hidden; margin: 24px 0 12px;
-                  border-radius: 999px; background: #dfedf8; }
-                .bar { display: block; width: 0; height: 100%; border-radius: inherit;
-                  background: #0b8ff4; transition: width .22s ease; }
-                .row { display: flex; justify-content: space-between; gap: 16px; color: #2875ad; font-size: 13px; font-weight: 700; }
-              </style>
-            </head>
-            <body>
-              <main>
-                <h1 id="launch-title">正在打开你的私人网盘</h1>
-                <p id="launch-message">正在检查本地环境</p>
-                <div class="track"><i class="bar" id="launch-bar"></i></div>
-                <div class="row"><span>请保留安装助手窗口</span><span id="launch-percent">0%</span></div>
-              </main>
-            </body>
-          </html>`);
-        popup.document.close();
-        return popup;
-      }
-
-      function updateLaunchWindow(popup, progress, errorMessage = "") {
-        if (!popup || popup.closed) return;
-        const value = progress || { percent: 0, message: "正在检查本地环境" };
-        const percent = Math.max(0, Math.min(100, Number(value.percent) || 0));
-        const hasError = Boolean(errorMessage) || value.stage === "error";
-        const title = popup.document.getElementById("launch-title");
-        const message = popup.document.getElementById("launch-message");
-        const bar = popup.document.getElementById("launch-bar");
-        const percentLabel = popup.document.getElementById("launch-percent");
-        if (!title || !message || !bar || !percentLabel) return;
-        title.textContent = hasError ? "网盘没有成功启动" : "正在打开你的私人网盘";
-        message.textContent = errorMessage || value.message || "正在准备";
-        bar.style.width = `${percent}%`;
-        bar.style.background = hasError ? "#c94040" : "#0b8ff4";
-        percentLabel.textContent = `${Math.round(percent)}%`;
-        popup.document.title = hasError ? "R2 Drive 启动失败" : "R2 Drive 正在启动";
       }
 
       function formValues(form) {
@@ -2276,7 +2258,7 @@
       function showStep(index, force = false) {
         if (!force) {
           if (index === 1 && !readyForStorage()) {
-            setStatus(byId("ready-status"), "bad", "请先完成账号和 R2 准备");
+            setStatus(byId("ready-status"), "bad", "请先完成账号连接并确认 R2 已绑卡");
             index = 0;
           }
           if (index >= 2 && index !== 4 && !state.resourcesReady) {
@@ -2298,9 +2280,20 @@
               ? state.updateInfo?.available
                 ? "安装最新版　›"
                 : "检查更新　›"
+              : index === 5
+                ? "开启上传加速　›"
               : "继续设置　›";
+        byId("top-next").classList.toggle(
+          "hidden",
+          (index === 3 && Boolean(state.configuredHostname)) || index === 5,
+        );
         document.querySelector(".content").scrollTop = 0;
-        if (index === 3 && state.resourcesReady && !state.domainLookupStarted) {
+        if (
+          index === 3 &&
+          state.resourcesReady &&
+          !state.domainLookupStarted &&
+          !state.configuredHostname
+        ) {
           setTimeout(() => detectDomains(), 0);
         }
       }
@@ -2308,7 +2301,7 @@
       function readyForStorage() {
         return (
           state.cloudflareChoice === "yes" &&
-          state.r2Choice !== null &&
+          state.r2Choice === "yes" &&
           state.accountConnected
         );
       }
@@ -2333,12 +2326,11 @@
         if (group === "domain") {
           byId("publish-form").classList.toggle("hidden", value !== "yes");
           byId("publish-drive").classList.toggle("hidden", value !== "yes");
-          byId("local-finish").classList.toggle("hidden", value !== "no");
           if (value !== null) byId("domain-empty").classList.add("hidden");
           setStatus(
             byId("publish-status"),
-            value === "yes" ? "" : "ok",
-            value === "yes" ? "域名已经自动选择" : "保留本机使用",
+            value === "yes" ? "" : "bad",
+            value === "yes" ? "域名已经自动选择" : "必须先准备域名",
           );
         }
       }
@@ -2449,7 +2441,6 @@
           state.domainChoice = null;
           byId("publish-form").classList.add("hidden");
           byId("publish-drive").classList.add("hidden");
-          byId("local-finish").classList.add("hidden");
           byId("domain-empty").classList.remove("hidden");
           byId("domain-detect-copy").textContent =
             "当前账号没有 Active 域名，添加后可以重新识别。";
@@ -2503,7 +2494,6 @@
         byId("domain-empty").classList.add("hidden");
         byId("publish-form").classList.add("hidden");
         byId("publish-drive").classList.add("hidden");
-        byId("local-finish").classList.add("hidden");
         byId("domain-detect-copy").textContent = "正在读取当前账号中的 Active 域名。";
         try {
           await startJob(
@@ -2583,34 +2573,6 @@
         if (config.customHostname) {
           useProductionHostname(config.customHostname);
         }
-        if (status.hasLocalSecrets) {
-          setStatus(byId("secret-status"), "ok", "已保存在本机");
-        }
-        if (!config.customHostname && status.localDrive && status.localDrive.running) {
-          byId("open-local").classList.remove("hidden");
-          if (status.localDrive.url) byId("open-local").href = status.localDrive.url;
-          setStatus(byId("local-status"), "ok", "网盘正在运行");
-          renderLocalProgress({
-            percent: 100,
-            stage: "ready",
-            message: "账号页面已经准备好",
-          });
-        } else if (
-          !config.customHostname &&
-          status.localDrive &&
-          status.localDrive.state === "error"
-        ) {
-          const message = "检测到旧网盘异常，点击“重新启动网盘”会自动关闭旧进程";
-          setStatus(byId("local-status"), "bad", "可以自动关闭并重启");
-          renderLocalProgress(
-            {
-              percent: 12,
-              stage: "error",
-              message,
-            },
-            message,
-          );
-        }
       }
 
       for (const button of document.querySelectorAll("[data-choice-group]")) {
@@ -2673,14 +2635,15 @@
           return;
         }
         if (state.r2Choice === null) {
-          setStatus(byId("ready-status"), "bad", "请选择是否已经有 R2 存储桶");
+          setStatus(byId("ready-status"), "bad", "请选择 R2 是否已绑定付款卡");
           return;
         }
-        setStatus(
-          byId("ready-status"),
-          "ok",
-          state.r2Choice === "yes" ? "准备完成" : "下一页一键创建 R2",
-        );
+        if (state.r2Choice !== "yes") {
+          setStatus(byId("ready-status"), "bad", "请先在 R2 控制台绑定付款卡");
+          byId("r2-guide").scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        setStatus(byId("ready-status"), "ok", "R2 付款方式已确认");
         showStep(1, true);
       }
 
@@ -2821,6 +2784,68 @@
       byId("check-update").addEventListener("click", checkUpdate);
       byId("install-update").addEventListener("click", installUpdate);
 
+      async function enableAcceleration() {
+        if (state.accelerationRunning || state.accelerationInfo?.enabled) return;
+        state.accelerationRunning = true;
+        renderAccelerationProgress({
+          percent: 3,
+          stage: "checking",
+          message: "正在启动 Wrangler 自动配置",
+        });
+        try {
+          await startJob("/api/upload-acceleration/enable", {}, {
+            statusElement: byId("acceleration-status"),
+            runningText: "正在自动配置",
+            doneText: "上传加速已开启",
+            onProgress: (progress) => {
+              if (progress) renderAccelerationProgress(progress);
+            },
+            onDone: (result) => {
+              state.accelerationInfo = result;
+              renderAccelerationProgress({
+                percent: 100,
+                stage: "done",
+                message: "上传加速已经开启",
+              });
+              byId("enable-upload-acceleration").classList.add("hidden");
+              byId("acceleration-open").href =
+                result.url || `https://${state.configuredHostname}/start`;
+              byId("acceleration-open").classList.remove("hidden");
+              setStatus(
+                byId("acceleration-status"),
+                "ok",
+                result.directUploadReady
+                  ? "就近写入和 R2 直传都已就绪"
+                  : "就近写入和高吞吐分片已就绪",
+              );
+            },
+            onError: (error, current) => {
+              renderAccelerationProgress(current?.progress, error.message);
+            },
+          });
+        } catch {
+          byId("log-dialog").showModal();
+        } finally {
+          state.accelerationRunning = false;
+        }
+      }
+
+      byId("enable-upload-acceleration").addEventListener("click", enableAcceleration);
+
+      window.addEventListener("message", (event) => {
+        const expectedOrigin = state.configuredHostname
+          ? `https://${state.configuredHostname}`
+          : "";
+        if (
+          event.origin !== expectedOrigin ||
+          event.data?.type !== "r2-drive:enable-upload-acceleration"
+        ) {
+          return;
+        }
+        showStep(state.resourcesReady ? 5 : 1, true);
+        if (state.resourcesReady) void enableAcceleration();
+      });
+
       byId("create-r2").addEventListener("click", async () => {
         if (!state.accountConnected || !byId("account-id").value.trim()) {
           showStep(0, true);
@@ -2848,93 +2873,10 @@
         }
       });
 
-      byId("start-local").addEventListener("click", async () => {
-        const productionUrl = byId("start-local").dataset.productionUrl;
-        if (productionUrl) {
-          window.open(productionUrl, "_blank", "noopener,noreferrer");
-          return;
-        }
-        if (!state.resourcesReady) {
-          showStep(1, true);
-          setStatus(byId("storage-status"), "bad", "请先连接 R2 存储");
-          return;
-        }
-        const opened = createLaunchWindow();
-        byId("local-help").classList.add("hidden");
-        renderLocalProgress({
-          percent: 2,
-          stage: "starting",
-          message: "正在提交启动任务",
-        });
-        updateLaunchWindow(opened, {
-          percent: 2,
-          stage: "starting",
-          message: "正在提交启动任务",
-        });
-        try {
-          await startJob("/api/local/start", {}, {
-            statusElement: byId("local-status"),
-            runningText: "正在启动网盘",
-            doneText: "网盘正在运行",
-            onProgress: (progress) => {
-              if (!progress) return;
-              renderLocalProgress(progress);
-              updateLaunchWindow(opened, progress);
-            },
-            onDone: (result) => {
-              const url = result.url || "http://localhost:3000/start";
-              byId("open-local").href = url;
-              byId("open-local").classList.remove("hidden");
-              renderLocalProgress({
-                percent: 100,
-                stage: "ready",
-                message: "账号页面已经准备好，正在打开",
-              });
-              if (opened) opened.location.href = url;
-              else window.open(url, "_blank", "noopener,noreferrer");
-            },
-            onError: (error, current) => {
-              const progress = current && current.progress
-                ? current.progress
-                : { percent: 10, stage: "error", message: error.message };
-              setStatus(byId("local-status"), "bad", "启动失败，请查看原因");
-              renderLocalProgress(progress, error.message);
-              updateLaunchWindow(opened, progress, error.message);
-            },
-          });
-        } catch {
-          // The inline progress card and launch window already show the recovery message.
-        }
-      });
-
-      byId("local-log-open").addEventListener("click", () => {
-        byId("log-dialog").showModal();
-      });
-
-      byId("local-secrets-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        try {
-          const values = formValues(event.currentTarget);
-          await api("/api/local-secrets", {
-            method: "POST",
-            body: JSON.stringify(values),
-          });
-          event.currentTarget.reset();
-          setStatus(byId("secret-status"), "ok", "已保存在本机");
-        } catch (error) {
-          setStatus(byId("secret-status"), "bad", error.message);
-        }
-      });
-
       byId("domain-next").addEventListener("click", () => showStep(3, true));
       byId("detect-domains").addEventListener("click", () => detectDomains(true));
       byId("zone-choice").addEventListener("change", updateAutomaticHostname);
       byId("domain-prefix").addEventListener("input", updateAutomaticHostname);
-      byId("local-only-finish").addEventListener("click", () => {
-        choose("domain", "no");
-        setStatus(byId("publish-status"), "ok", "设置完成，可以继续本机使用");
-      });
-
       byId("publish-drive").addEventListener("click", async () => {
         if (state.domainChoice !== "yes") {
           setStatus(byId("publish-status"), "bad", "请先选择“有域名”");
@@ -2996,8 +2938,9 @@
           if (state.updateInfo?.available) installUpdate();
           else checkUpdate();
         }
+        else if (state.activeStep === 5) enableAcceleration();
         else if (state.domainChoice === "yes") byId("publish-drive").click();
-        else byId("local-only-finish").click();
+        else setStatus(byId("publish-status"), "bad", "必须先准备并托管一个 Active 域名");
       });
 
       api("/api/status", { method: "GET" })
@@ -3019,6 +2962,11 @@
           } else if (requestedStep === "update") {
             showStep(4, true);
             await checkUpdate();
+          } else if (requestedStep === "upload-acceleration") {
+            showStep(state.resourcesReady ? 5 : 1, true);
+            if (!state.resourcesReady) {
+              setStatus(byId("storage-status"), "bad", "请先连接 R2 存储，再开启上传加速");
+            }
           }
         })
         .catch((error) => {

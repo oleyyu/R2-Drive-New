@@ -6,6 +6,7 @@ import {
   Clipboard,
   Code,
   Key,
+  Lightning,
   LockKey,
   Monitor,
   Palette,
@@ -46,6 +47,7 @@ function SettingsContent({ user }: { user: ShellUser }) {
   const [tokens, setTokens] = useState<TokenRow[]>([]);
   const [notice, setNotice] = useState("");
   const [createdToken, setCreatedToken] = useState("");
+  const [accelerationBusy, setAccelerationBusy] = useState(false);
 
   const loadTokens = useCallback(async () => {
     const response = await fetch("/api/settings/tokens");
@@ -95,6 +97,44 @@ function SettingsContent({ user }: { user: ShellUser }) {
     });
     setNotice(response.ok ? "密码已更新。" : await messageFrom(response));
     if (response.ok) form.reset();
+  }
+
+  async function enableUploadAcceleration() {
+    const helper = window.open(
+      "http://127.0.0.1:8788/?step=upload-acceleration",
+      "_blank",
+    );
+    if (!helper) {
+      setNotice("浏览器阻止了本机助手窗口，请允许弹出窗口后重试。");
+      return;
+    }
+    const sendIntent = () => {
+      helper.postMessage(
+        { type: "r2-drive:enable-upload-acceleration" },
+        "http://127.0.0.1:8788",
+      );
+    };
+    for (const delay of [300, 700, 1_200, 2_000, 3_200, 5_000]) {
+      window.setTimeout(sendIntent, delay);
+    }
+    setAccelerationBusy(true);
+    const acceleratedPreferences = {
+      ...preferences,
+      uploadConcurrency: 6,
+      networkProfile: "throughput",
+    };
+    const response = await fetch("/api/settings/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preferences: acceleratedPreferences }),
+    });
+    setAccelerationBusy(false);
+    if (!response.ok) {
+      setNotice(await messageFrom(response));
+      return;
+    }
+    applyPreferences(acceleratedPreferences);
+    setNotice("已切换到高吞吐上传；本机助手正在自动完成 Wrangler 配置。");
   }
 
   async function createToken(event: FormEvent<HTMLFormElement>) {
@@ -177,6 +217,31 @@ function SettingsContent({ user }: { user: ShellUser }) {
           <button className="button button-primary form-submit"><Check /> 保存设置</button>
         </form>
       </section>
+
+      {user.role === "admin" && (
+        <section className="settings-section">
+          <div className="settings-section-title">
+            <Lightning />
+            <div>
+              <h2>上传加速</h2>
+              <p>自动开启 R2 就近写入，并使用 80 MiB 分片与 6 路并发；不需要打开 Cloudflare 页面。</p>
+            </div>
+          </div>
+          <div className="settings-form">
+            <button
+              className="button button-primary form-submit"
+              type="button"
+              disabled={accelerationBusy}
+              onClick={() => void enableUploadAcceleration()}
+            >
+              <Lightning /> {accelerationBusy ? "正在准备…" : "开启上传加速"}
+            </button>
+            <small className="muted">
+              需通过 R2-Drive 启动器打开网盘；点击后新窗口会自动配置并复核，不需要再操作。
+            </small>
+          </div>
+        </section>
+      )}
 
       <section className="settings-section">
         <div className="settings-section-title">

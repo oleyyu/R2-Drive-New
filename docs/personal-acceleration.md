@@ -34,6 +34,8 @@ npx wrangler r2 bucket local-uploads enable 你的桶名
 
 Local Uploads 会让 `PutObject` 和 `UploadPart` 先写入靠近客户端的位置，再异步复制到主桶；对象立即可读并保持强一致。Cloudflare 当前说明该功能不额外收费，只收正常 Class A 操作费。参见 [R2 Local uploads](https://developers.cloudflare.com/r2/buckets/local-uploads/)。
 
+管理员也可以直接在网盘的“个人设置 → 上传加速”点击“开启上传加速”。通过启动器打开网盘时，本机助手已经在 `127.0.0.1` 待命；设置页会用经过网盘域名校验的浏览器消息触发助手，随后 Wrangler 自动确认账号和桶、开启并复核 Local Uploads、同步 CORS。整个加速流程不跳转 Cloudflare 页面，也不显示或复制凭据。
+
 注意：
 
 - 它优化上传，不会把下载内容永久复制到所有边缘。
